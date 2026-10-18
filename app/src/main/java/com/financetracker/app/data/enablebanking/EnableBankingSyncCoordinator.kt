@@ -13,6 +13,7 @@ import com.financetracker.app.data.importexport.BalanceReconciler
 import com.financetracker.app.data.importexport.DuplicateTransactionFilter
 import com.financetracker.app.data.importexport.ParsedTransactionRow
 import com.financetracker.app.data.importexport.describeError
+import com.financetracker.app.data.prefs.BankReservations
 import com.financetracker.app.data.prefs.BankScheduledPayments
 import com.financetracker.app.data.prefs.EnableBankingPrefs
 import com.financetracker.app.data.prefs.LinkedBankAccount
@@ -142,6 +143,10 @@ object EnableBankingSyncCoordinator {
             val rows = fetched.booked
             fetchedSoFar += rows.size
             storeScheduledPayments(repository, accountId, fetched.scheduled)
+            BankReservations.replaceForAccount(
+                accountId,
+                fetched.reserved.map { ScheduledPayment(accountId, it.date, it.amount, it.note, null) }
+            )
 
             val existing = repository.getTransactionsForAccount(accountId)
             val filterResult = DuplicateTransactionFilter.filter(existing, rows)

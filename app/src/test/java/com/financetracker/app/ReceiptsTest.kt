@@ -131,4 +131,27 @@ class ReceiptsTest {
         assertEquals(36.95, rises[0].before, 0.001)
         assertEquals(1, ShoppingStats.byItem(items, range).count { it.label.startsWith("KAFFE") })
     }
+
+    @Test
+    fun `only receipts paid from your own bank account are kept`() {
+        val bought = at(2026, 10, 16)
+        val netto = listOf("netto")
+        val mine = listOf(tx(1, 182.45, at(2026, 10, 17), note = "MCD 02031 NETTO 7712 Solrød"))
+        // Your card payment at Netto the next day, same amount: yours.
+        assertTrue(ReceiptMatcher.paidFromOwnAccount(182.45, bought, "Netto Solrød", netto, mine, emptyList()))
+        // A household member's Netto receipt: no payment of yours matches the amount.
+        assertTrue(!ReceiptMatcher.paidFromOwnAccount(96.00, bought, "Netto Solrød", netto, mine, emptyList()))
+        // Same amount, but your payment was at another shop: not this receipt.
+        val elsewhere = listOf(tx(2, 96.00, at(2026, 10, 16), note = "MCD 02040 Q8 Solrød"))
+        assertTrue(!ReceiptMatcher.paidFromOwnAccount(96.00, bought, "Netto Solrød", netto, elsewhere, emptyList()))
+        // Too long after the purchase.
+        val late = listOf(tx(3, 182.45, at(2026, 10, 22), note = "NETTO"))
+        assertTrue(!ReceiptMatcher.paidFromOwnAccount(182.45, bought, "Netto", netto, late, emptyList()))
+        // Only reserved at the bank so far (not booked yet): yours too.
+        val reserved = listOf(at(2026, 10, 16) to (182.45 to "Dankort-nota NETTO 7712"))
+        assertTrue(ReceiptMatcher.paidFromOwnAccount(182.45, bought, "Netto", netto, emptyList(), reserved))
+        // Føtex's bank text is often written FOETEX.
+        val foetex = listOf(tx(4, 59.95, at(2026, 10, 16), note = "MCD 02050 FOETEX Køge"))
+        assertTrue(ReceiptMatcher.paidFromOwnAccount(59.95, bought, "Føtex Køge", listOf("føtex", "foetex", "fotex"), foetex, emptyList()))
+    }
 }

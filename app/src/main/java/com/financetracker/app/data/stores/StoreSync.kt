@@ -1,5 +1,7 @@
 package com.financetracker.app.data.stores
 
+import com.financetracker.app.data.prefs.BankScheduledPayments
+import com.financetracker.app.data.prefs.BankReservations
 import android.content.Context
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -44,7 +46,9 @@ object StoreSync {
     private val lock = Mutex()
 
     /** What a finished fetch did: how many receipts were new, or what went wrong. */
-    data class FetchResult(val accountId: String, val store: Store, val added: Int, val problem: String?)
+    /** [skipped]: receipts left out because no payment from the person's own accounts matches them
+     * (e.g. someone else in the household paid with their card on the shared store account). */
+    data class FetchResult(val accountId: String, val store: Store, val added: Int, val problem: String?, val skipped: Int = 0)
 
     private val _finished = MutableSharedFlow<FetchResult>(extraBufferCapacity = 16)
     /** Each fetch as it finishes, so the screen can say what happened. */
@@ -56,6 +60,10 @@ object StoreSync {
         result.added == 0 -> "No new receipts from ${result.store.label}"
         result.added == 1 -> "1 new receipt from ${result.store.label}"
         else -> "${result.added} new receipts from ${result.store.label}"
+    } + if (result.problem == null && result.skipped > 0) {
+        " · ${result.skipped} not paid from your bank account, left out"
+    } else {
+        ""
     }
 
     /** Fetches every connected account (or just [accountId]); returns how many receipts were new. */
@@ -76,7 +84,7 @@ object StoreSync {
             val since = if (account.lastSyncAt == 0L) now - FIRST_FETCH_DAYS * DAY else maxOf(account.lastSyncAt - OVERLAP_DAYS * DAY, now - FIRST_FETCH_DAYS * DAY)
             val (fetched, secret) = connector.fetch(account.secret, since)
             val fresh = fetched.filter { it.receipt.total > 0 && repository.findReceipt(account.store.id, it.receipt.externalId) == null }
-            val saved = save(repository, account.store.id, fresh)
+            val (saved, skipped) = save(repository, account.store, fresh)
             StoreAccounts.update(context, account.id) {
                 it.copy(
                     secret = secret,
@@ -87,7 +95,7 @@ object StoreSync {
                     problem = null
                 )
             }
-            _finished.tryEmit(FetchResult(account.id, account.store, saved, null))
+            _finished.tryEmit(FetchResult(account.id, account.store, saved, null, skipped))
             return saved
         } catch (e: CancellationException) {
             throw e
@@ -103,21 +111,38 @@ object StoreSync {
         return 0
     }
 
-    /** Sorts the items into categories, matches each receipt to its payment and saves it, split. */
-    private suspend fun save(repository: FinanceRepository, source: String, receipts: List<StoreReceipt>): Int {
-        if (receipts.isEmpty()) return 0
-        val categorised = ItemCategories.assign(repository, receipts)
+    /**
+     * Keeps only the receipts paid from the person's own bank accounts (a booked or reserved payment
+     * matches), sorts their items into categories, matches each to its payment and saves it, split.
+     * The others aren't saved; a receipt whose payment hasn't reached the bank yet is simply checked
+     * again on the next fetch (each fetch looks back two weeks). Returns (saved, left out).
+     */
+    private suspend fun save(repository: FinanceRepository, store: Store, receipts: List<StoreReceipt>): Pair<Int, Int> {
+        if (receipts.isEmpty()) return 0 to 0
         val all = repository.observeTransactions().first()
-        val transactions = all.filter { !ReceiptSplits.isPart(it.id) }
+        // A split payment shows as its parts; for matching, the payment itself counts.
+        val transactions = all.filter { !ReceiptSplits.isPart(it.id) } +
+            all.filter { ReceiptSplits.isPart(it.id) }.groupBy { ReceiptSplits.originalId(it.id) }
+                .map { (id, parts) -> parts.first().copy(id = id, amount = parts.sumOf { it.amount }) }
+        val notYetBooked = (BankReservations.reservations.value + BankScheduledPayments.payments.value)
+            .map { it.date to (it.amount to it.note) }
+        val own = receipts.filter {
+            ReceiptMatcher.paidFromOwnAccount(
+                it.receipt.total, it.receipt.purchasedAt, it.receipt.storeName, store.bankWords, transactions, notYetBooked
+            )
+        }
+        val skipped = receipts.size - own.size
+        if (own.isEmpty()) return 0 to skipped
+        val categorised = ItemCategories.assign(repository, own)
         val taken = repository.observeTransactionIdsWithReceipt().first().toMutableSet()
         var count = 0
         for (receipt in categorised.sortedBy { it.purchasedAt }) {
             val match = ReceiptMatcher.best(receipt.total, receipt.purchasedAt, receipt.storeName, transactions, taken)
             match?.let { taken += it.id }
-            Receipts.save(repository, receipt, source, match?.id, split = true)
+            Receipts.save(repository, receipt, store.id, match?.id, split = true)
             count++
         }
-        return count
+        return count to skipped
     }
 
     /** Starts a fetch in the background (it keeps going if the screen is closed). */

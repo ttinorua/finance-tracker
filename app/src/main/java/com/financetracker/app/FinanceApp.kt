@@ -18,6 +18,7 @@ import com.financetracker.app.data.backup.AutoBackupSettings
 import com.financetracker.app.data.enablebanking.EnableBankingCredentials
 import com.financetracker.app.data.enablebanking.EnableBankingSyncWorker
 import com.financetracker.app.data.prefs.AiInsightsCache
+import com.financetracker.app.data.prefs.BankReservations
 import com.financetracker.app.data.prefs.BankScheduledPayments
 import com.financetracker.app.data.prefs.BudgetLimits
 import com.financetracker.app.data.prefs.BudgetSettings
@@ -50,6 +51,7 @@ class FinanceApp : Application() {
         ThemeSettings.init(this)
         MainAccountSettings.init(this)
         BankScheduledPayments.init(this)
+        BankReservations.init(this)
         BudgetSettings.init(this)
         BudgetLimits.init(this)
         AiInsightsCache.init(this)

@@ -22,7 +22,13 @@ data class AuthStart(val url: String, val state: String)
 
 /** [booked] are real transactions to import; [scheduled] are outgoing payments the bank has
  * scheduled but not booked yet, kept apart so they're never imported. */
-data class FetchedTransactions(val booked: List<ParsedTransactionRow>, val scheduled: List<ParsedTransactionRow>)
+/** [reserved]: recent card payments the bank has reserved but not booked yet (used only to tell
+ * whether a store receipt was paid from these accounts). */
+data class FetchedTransactions(
+    val booked: List<ParsedTransactionRow>,
+    val scheduled: List<ParsedTransactionRow>,
+    val reserved: List<ParsedTransactionRow> = emptyList()
+)
 
 /**
  * Talks to Enable Banking's open-banking (PSD2/AISP) API to link and sync a Sydbank account.
@@ -143,6 +149,7 @@ object EnableBankingService {
                 var includeDateTo = !futureDateToRejected
                 val rows = mutableListOf<ParsedTransactionRow>()
                 val scheduled = mutableListOf<ParsedTransactionRow>()
+                val reserved = mutableListOf<ParsedTransactionRow>()
                 var continuationKey: String? = null
                 var rowNumber = 0
                 while (true) {
@@ -171,6 +178,7 @@ object EnableBankingService {
                                 rows.add(booked)
                             } else {
                                 mapScheduledPayment(obj, rowNumber)?.let { scheduled.add(it) }
+                                    ?: mapReservation(obj, rowNumber)?.let { reserved.add(it) }
                             }
                         }
                     }
@@ -181,7 +189,7 @@ object EnableBankingService {
                     continuationKey = json.stringOrNull("continuation_key")
                     if (continuationKey == null) break
                 }
-                Result.success(FetchedTransactions(rows, scheduled))
+                Result.success(FetchedTransactions(rows, scheduled, reserved))
             } catch (e: Exception) {
                 Result.failure(mapError(e))
             }
@@ -220,6 +228,23 @@ object EnableBankingService {
         if (date < today || (!isPending && date == today)) return null
         return mapRow(obj, rowNumber, date)?.takeIf { it.type == TransactionType.EXPENSE }
     }
+
+    /** A card payment the bank has reserved but not booked yet (pending, dated in the last
+     * [RESERVATION_DAYS] days). Never imported as a transaction; only used to recognise a store
+     * receipt as paid from this account before the payment books. */
+    private fun mapReservation(obj: JSONObject, rowNumber: Int): ParsedTransactionRow? {
+        if (obj.stringOrNull("status") !in NOT_YET_BOOKED_STATUSES) return null
+        val dateString = obj.stringOrNull("transaction_date")
+            ?: obj.stringOrNull("booking_date")
+            ?: obj.stringOrNull("value_date")
+            ?: return null
+        val date = parseDateOnly(dateString) ?: return null
+        val today = todayUtcMidnight()
+        if (date > today || date < today - RESERVATION_DAYS * 24 * 60 * 60 * 1000) return null
+        return mapRow(obj, rowNumber, date)?.takeIf { it.type == TransactionType.EXPENSE }
+    }
+
+    private const val RESERVATION_DAYS = 14L
 
     private fun mapRow(obj: JSONObject, rowNumber: Int, date: Long): ParsedTransactionRow? {
         val amountObj = obj.optJSONObject("transaction_amount") ?: return null

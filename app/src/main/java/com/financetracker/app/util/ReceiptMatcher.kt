@@ -50,6 +50,34 @@ object ReceiptMatcher {
         return if (sameDay && sameAmount && first.note == second.note) null else first
     }
 
+    /**
+     * Whether a receipt from a store account was paid from the person's own bank account: one of
+     * their expenses (booked, or still only reserved/pending at the bank) has about the same amount,
+     * a date from the day before to four days after, and the store's name in its text ([storeWords],
+     * e.g. "netto"). A store account shared with the household also holds receipts someone else
+     * paid with their own card; those have no such payment and are left out.
+     */
+    fun paidFromOwnAccount(
+        total: Double,
+        purchasedAt: Long,
+        storeName: String,
+        storeWords: List<String>,
+        transactions: List<TransactionWithDetails>,
+        notYetBooked: List<Pair<Long, Pair<Double, String>>>
+    ): Boolean {
+        val words = (storeWords + listOfNotNull(storeName.lowercase().split(Regex("[^\\p{L}0-9]+")).firstOrNull { it.length >= 3 }))
+            .map { it.lowercase() }.distinct()
+        fun mentionsStore(note: String) = note.lowercase().let { text -> words.any { it in text } }
+        fun inWindow(date: Long) = date >= startOfDay(purchasedAt) - DAY && date < startOfDay(purchasedAt) + 4 * DAY
+        val booked = transactions.any { tx ->
+            tx.type == TransactionType.EXPENSE && abs(tx.amount - total) <= AMOUNT_TOLERANCE &&
+                inWindow(tx.date) && mentionsStore(tx.note)
+        }
+        return booked || notYetBooked.any { (date, payment) ->
+            abs(payment.first - total) <= AMOUNT_TOLERANCE && inWindow(date) && mentionsStore(payment.second)
+        }
+    }
+
     private fun startOfDay(t: Long): Long {
         val cal = java.util.Calendar.getInstance().apply {
             timeInMillis = t
