@@ -1,5 +1,0 @@
-#Name
-#version
-#Licence
-#Support
-#################################

@@ -1,7 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12 and newer. Nothing goes into Google's cloud phone backup: the transactions would sit
+     there unencrypted. The app's own backup (Settings > Import/Export: weekly to OneDrive, Google
+     Drive or a file, optionally with a password) is the way to keep a copy. Moving straight to a new
+     phone (cable / Smart Switch) still brings the database along. -->
 <data-extraction-rules>
     <cloud-backup>
-        <include domain="database" path="finance_tracker.db" />
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
     </cloud-backup>
     <device-transfer>
         <include domain="database" path="finance_tracker.db" />
