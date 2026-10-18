@@ -157,9 +157,10 @@ object StoreSync {
     /**
      * Receipts already saved from the store connections that weren't paid from the person's own
      * bank account (e.g. fetched before only own receipts were kept, from a store account shared
-     * with the household). Only receipts not linked to a payment are considered, and only those
-     * older than [RECHECK_DAYS] (a newer one's payment may still arrive) and dated within the bank
-     * history the app has (older ones can't be checked). For the person to confirm before removing.
+     * with the household). Only receipts not linked to a payment are considered, dated within the
+     * bank history the app has (older ones can't be checked), and only once their payment would have
+     * shown: the bank has synced at least an hour after the purchase and reports card reservations,
+     * or [BOOKING_DAYS] have passed (by then a card payment is booked). For the person to confirm.
      */
     suspend fun receiptsNotPaidByYou(repository: FinanceRepository, now: Long = System.currentTimeMillis()): List<Receipt> {
         val transactions = paymentsForMatching(repository)
@@ -169,7 +170,7 @@ object StoreSync {
         return repository.observeReceipts().first().filter { receipt ->
             val store = stores[receipt.source] ?: return@filter false
             receipt.transactionId == null &&
-                receipt.purchasedAt < now - RECHECK_DAYS * DAY &&
+                paymentWouldShow(receipt.purchasedAt, now) &&
                 receipt.purchasedAt > historyStart + DAY &&
                 !ReceiptMatcher.paidFromOwnAccount(
                     receipt.total, receipt.purchasedAt, receipt.storeName, store.bankWords, transactions, notYetBooked
@@ -177,7 +178,17 @@ object StoreSync {
         }.sortedByDescending { it.purchasedAt }
     }
 
-    private const val RECHECK_DAYS = 14L
+    private const val BOOKING_DAYS = 5L
+
+    /** Whether a payment for a purchase at [purchasedAt] would be known to the app by now. */
+    internal fun paymentWouldShow(
+        purchasedAt: Long,
+        now: Long,
+        reservationsSeen: Boolean = BankReservations.seenAny,
+        reservationsUpdatedAt: Long = BankReservations.updatedAt
+    ): Boolean =
+        purchasedAt < now - BOOKING_DAYS * DAY ||
+            (reservationsSeen && purchasedAt < reservationsUpdatedAt - 60 * 60 * 1000L)
 
     /** Starts a fetch in the background (it keeps going if the screen is closed). */
     fun enqueue(context: Context, accountId: String? = null) {

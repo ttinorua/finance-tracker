@@ -154,4 +154,18 @@ class ReceiptsTest {
         val foetex = listOf(tx(4, 59.95, at(2026, 10, 16), note = "MCD 02050 FOETEX Køge"))
         assertTrue(ReceiptMatcher.paidFromOwnAccount(59.95, bought, "Føtex Køge", listOf("føtex", "foetex", "fotex"), foetex, emptyList()))
     }
+
+    @Test
+    fun `recent receipts are checked once their payment would have shown`() {
+        val now = at(2026, 10, 18, 18)
+        val today = at(2026, 10, 18, 10)
+        val sync = at(2026, 10, 18, 16)
+        // A bank that reports reservations synced six hours after the purchase: check it now.
+        assertTrue(com.financetracker.app.data.stores.StoreSync.paymentWouldShow(today, now, true, sync))
+        // Synced only 30 minutes after the purchase: too soon.
+        assertTrue(!com.financetracker.app.data.stores.StoreSync.paymentWouldShow(today, now, true, today + 30 * 60_000L))
+        // A bank that never reported a reservation: wait until the payment would be booked (5 days).
+        assertTrue(!com.financetracker.app.data.stores.StoreSync.paymentWouldShow(today, now, false, sync))
+        assertTrue(com.financetracker.app.data.stores.StoreSync.paymentWouldShow(at(2026, 10, 12), now, false, 0L))
+    }
 }
