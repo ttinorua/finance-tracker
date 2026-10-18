@@ -1,5 +1,7 @@
 package com.financetracker.app.data.stores
 
+import com.financetracker.app.data.db.entity.TransactionWithDetails
+import com.financetracker.app.data.db.entity.Receipt
 import com.financetracker.app.data.prefs.BankScheduledPayments
 import com.financetracker.app.data.prefs.BankReservations
 import android.content.Context
@@ -119,13 +121,8 @@ object StoreSync {
      */
     private suspend fun save(repository: FinanceRepository, store: Store, receipts: List<StoreReceipt>): Pair<Int, Int> {
         if (receipts.isEmpty()) return 0 to 0
-        val all = repository.observeTransactions().first()
-        // A split payment shows as its parts; for matching, the payment itself counts.
-        val transactions = all.filter { !ReceiptSplits.isPart(it.id) } +
-            all.filter { ReceiptSplits.isPart(it.id) }.groupBy { ReceiptSplits.originalId(it.id) }
-                .map { (id, parts) -> parts.first().copy(id = id, amount = parts.sumOf { it.amount }) }
-        val notYetBooked = (BankReservations.reservations.value + BankScheduledPayments.payments.value)
-            .map { it.date to (it.amount to it.note) }
+        val transactions = paymentsForMatching(repository)
+        val notYetBooked = notYetBooked()
         val own = receipts.filter {
             ReceiptMatcher.paidFromOwnAccount(
                 it.receipt.total, it.receipt.purchasedAt, it.receipt.storeName, store.bankWords, transactions, notYetBooked
@@ -144,6 +141,43 @@ object StoreSync {
         }
         return count to skipped
     }
+
+    /** The person's payments, with a split payment counted whole (it shows as its parts). */
+    private suspend fun paymentsForMatching(repository: FinanceRepository): List<TransactionWithDetails> {
+        val all = repository.observeTransactions().first()
+        return all.filter { !ReceiptSplits.isPart(it.id) } +
+            all.filter { ReceiptSplits.isPart(it.id) }.groupBy { ReceiptSplits.originalId(it.id) }
+                .map { (id, parts) -> parts.first().copy(id = id, amount = parts.sumOf { it.amount }) }
+    }
+
+    /** Payments the bank has reserved or scheduled but not booked yet. */
+    private fun notYetBooked(): List<Pair<Long, Pair<Double, String>>> =
+        (BankReservations.reservations.value + BankScheduledPayments.payments.value).map { it.date to (it.amount to it.note) }
+
+    /**
+     * Receipts already saved from the store connections that weren't paid from the person's own
+     * bank account (e.g. fetched before only own receipts were kept, from a store account shared
+     * with the household). Only receipts not linked to a payment are considered, and only those
+     * older than [RECHECK_DAYS] (a newer one's payment may still arrive) and dated within the bank
+     * history the app has (older ones can't be checked). For the person to confirm before removing.
+     */
+    suspend fun receiptsNotPaidByYou(repository: FinanceRepository, now: Long = System.currentTimeMillis()): List<Receipt> {
+        val transactions = paymentsForMatching(repository)
+        val historyStart = transactions.filter { it.type == TransactionType.EXPENSE }.minOfOrNull { it.date } ?: return emptyList()
+        val notYetBooked = notYetBooked()
+        val stores = Store.entries.associateBy { it.id }
+        return repository.observeReceipts().first().filter { receipt ->
+            val store = stores[receipt.source] ?: return@filter false
+            receipt.transactionId == null &&
+                receipt.purchasedAt < now - RECHECK_DAYS * DAY &&
+                receipt.purchasedAt > historyStart + DAY &&
+                !ReceiptMatcher.paidFromOwnAccount(
+                    receipt.total, receipt.purchasedAt, receipt.storeName, store.bankWords, transactions, notYetBooked
+                )
+        }.sortedByDescending { it.purchasedAt }
+    }
+
+    private const val RECHECK_DAYS = 14L
 
     /** Starts a fetch in the background (it keeps going if the screen is closed). */
     fun enqueue(context: Context, accountId: String? = null) {

@@ -1,5 +1,6 @@
 package com.financetracker.app.ui.screens.receipts
 
+import com.financetracker.app.data.db.entity.Receipt
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
@@ -175,6 +176,9 @@ fun StoreConnectionsScreen(repository: FinanceRepository, onBack: () -> Unit, on
     var managing by remember { mutableStateOf<StoreAccount?>(null) }
     var disconnecting by remember { mutableStateOf<StoreAccount?>(null) }
     var clearConsents by remember { mutableStateOf(false) }
+    // Receipts found by "Check receipts" that weren't paid from the person's own bank account.
+    var notYours by remember { mutableStateOf<List<Receipt>?>(null) }
+    var checking by remember { mutableStateOf(false) }
     // Accounts the person pressed "Fetch now" for, so the result can be shown when it's done.
     val fetchRequested = remember { mutableSetOf<String>() }
     LaunchedEffect(Unit) {
@@ -253,6 +257,38 @@ fun StoreConnectionsScreen(repository: FinanceRepository, onBack: () -> Unit, on
                         TextButton(onClick = { onConnect(store, true) }, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
                             Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                             Text("  Add another (e.g. your partner's)")
+                        }
+                    }
+                }
+            }
+            if (connected.isNotEmpty()) {
+                item(key = "check_receipts") {
+                    GlassCard {
+                        Column(Modifier.padding(14.dp)) {
+                            Text("Only your own receipts", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                "New receipts are kept only when they match a payment from your bank account, so " +
+                                    "purchases someone else in the household paid with their own card are left out. " +
+                                    "Check the receipts fetched before for any that don't belong to you.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            OutlinedButton(
+                                enabled = !checking,
+                                onClick = {
+                                    checking = true
+                                    scope.launch {
+                                        val found = StoreSync.receiptsNotPaidByYou(repository)
+                                        checking = false
+                                        if (found.isEmpty()) {
+                                            Toast.makeText(context, "All receipts match your own payments", Toast.LENGTH_LONG).show()
+                                        } else {
+                                            notYours = found
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.padding(top = 8.dp)
+                            ) { Text(if (checking) "Checking…" else "Check receipts") }
                         }
                     }
                 }
@@ -396,6 +432,48 @@ fun StoreConnectionsScreen(repository: FinanceRepository, onBack: () -> Unit, on
                 dismissButton = { TextButton(onClick = close) { Text("Cancel") } }
             )
         }
+    }
+
+    notYours?.let { found ->
+        val total = found.sumOf { it.total }
+        AlertDialog(
+            onDismissRequest = { notYours = null },
+            title = { Text(if (found.size == 1) "1 receipt isn't yours" else "${found.size} receipts aren't yours") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "No payment from your bank account matches ${if (found.size == 1) "it" else "them"} " +
+                            "(${Formatters.amount(total)} in all), so they were most likely paid by someone else in your " +
+                            "household. Removing them takes them out of your shopping overview; your transactions don't change.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    found.take(12).forEach { r ->
+                        Text(
+                            "${Formatters.date(r.purchasedAt)} · ${r.storeName} · ${Formatters.amount(r.total)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (found.size > 12) {
+                        Text("… and ${found.size - 12} more", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    notYours = null
+                    scope.launch {
+                        found.forEach { repository.deleteReceipt(it.id) }
+                        Toast.makeText(
+                            context,
+                            if (found.size == 1) "Removed 1 receipt" else "Removed ${found.size} receipts",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }) { Text("Remove") }
+            },
+            dismissButton = { TextButton(onClick = { notYours = null }) { Text("Keep") } }
+        )
     }
 
     if (clearConsents) {
