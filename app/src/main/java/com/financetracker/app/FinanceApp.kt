@@ -1,5 +1,7 @@
 package com.financetracker.app
 
+import com.financetracker.app.data.ai.chat.AssistantPrefs
+import com.financetracker.app.data.ai.chat.SavedChats
 import com.financetracker.app.data.prefs.ViewFilter
 import com.financetracker.app.data.enablebanking.BankAutoSync
 import android.app.Application
@@ -52,6 +54,8 @@ class FinanceApp : Application() {
         ThemeSettings.init(this)
         MainAccountSettings.init(this)
         ViewFilter.init(this)
+        SavedChats.init(this)
+        AssistantPrefs.init(this)
         BankScheduledPayments.init(this)
         BankReservations.init(this)
         BudgetSettings.init(this)

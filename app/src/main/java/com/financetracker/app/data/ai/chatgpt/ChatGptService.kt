@@ -1,5 +1,6 @@
 package com.financetracker.app.data.ai.chatgpt
 
+import com.financetracker.app.data.ai.chat.AssistantPrefs
 import com.financetracker.app.data.ai.AiJson
 import com.financetracker.app.data.ai.AiRequestException
 import com.financetracker.app.data.ai.ChatTurn
@@ -18,6 +19,9 @@ import java.net.URL
  * `instructions`, and settings such as temperature or a reply-length cap aren't accepted.
  * Docs: developers.openai.com/siwc/token-sharing-open-source/models-and-inference.
  */
+/** A model the person's ChatGPT plan offers apps. */
+data class ChatGptModel(val slug: String, val name: String)
+
 internal object ChatGptService {
 
     private const val RESPONSES_URL = "${ChatGptAuth.RESOURCE}/responses"
@@ -198,8 +202,20 @@ internal object ChatGptService {
         return texts.joinToString("").trim()
     }
 
+    /** The model to use: the one picked in the AI advisor, else the one this account offers first. */
     private fun model(): String {
+        AssistantPrefs.chatGptModel.value?.let { return it }
         model?.let { return it }
+        val picked = pickModel(modelsJson()) ?: throw AiRequestException("This ChatGPT account doesn't offer a model for apps.")
+        model = picked
+        return picked
+    }
+
+    /** The models this account offers apps, in the server's preferred order (the first is what
+     * Auto uses). */
+    suspend fun availableModels(): List<ChatGptModel> = withContext(Dispatchers.IO) { listModels(modelsJson()) }
+
+    private fun modelsJson(): JSONObject {
         val connection = URL(MODELS_URL).openConnection() as HttpURLConnection
         try {
             connection.connectTimeout = 20_000
@@ -210,12 +226,20 @@ internal object ChatGptService {
                 val text = connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
                 throw AiRequestException(errorOutcome(status, text).userMessage())
             }
-            val json = JSONObject(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
-            val picked = pickModel(json) ?: throw AiRequestException("This ChatGPT account doesn't offer a model for apps.")
-            model = picked
-            return picked
+            return JSONObject(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
         } finally {
             connection.disconnect()
+        }
+    }
+
+    /** Every model meant to be shown, with its display name. */
+    internal fun listModels(json: JSONObject): List<ChatGptModel> {
+        val models = json.optJSONArray("models") ?: json.optJSONArray("data") ?: return emptyList()
+        val all = (0 until models.length()).mapNotNull { models.optJSONObject(it) }
+        val listed = all.filter { it.optString("visibility") == "list" }.ifEmpty { all }
+        return listed.mapNotNull { o ->
+            val slug = o.optString("slug").ifBlank { o.optString("id") }.ifBlank { return@mapNotNull null }
+            ChatGptModel(slug, o.optString("display_name").ifBlank { slug })
         }
     }
 

@@ -1,5 +1,16 @@
 package com.financetracker.app.ui.screens.ai
 
+import java.util.UUID
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.asStateFlow
+import com.financetracker.app.data.ai.chatgpt.ChatGptService
+import com.financetracker.app.data.ai.chatgpt.ChatGptModel
+import com.financetracker.app.data.ai.chat.SavedMessage
+import com.financetracker.app.data.ai.chat.SavedChats
+import com.financetracker.app.data.ai.chat.SavedChat
+import com.financetracker.app.data.ai.chat.SavedCard
+import com.financetracker.app.data.ai.chat.AssistantPrefs
+import com.financetracker.app.data.ai.AiSettings
 import com.financetracker.app.data.ai.AiProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -38,7 +49,13 @@ data class AiChatMessage(
 data class AskAiUiState(
     val messages: List<AiChatMessage> = emptyList(),
     val isSending: Boolean = false,
-    val isConfigured: Boolean = AiService.isConfigured
+    val isConfigured: Boolean = AiService.isConfigured,
+    /** The open chat's name (its first question until renamed). */
+    val title: String = "New chat",
+    /** ChatGPT is the AI tried first, so the model picker applies. */
+    val chatGptFirst: Boolean = false,
+    /** The chosen ChatGPT model's name, or null for Auto. */
+    val chatGptModel: String? = null
 )
 
 /** How many earlier messages go along with each question (the advisor looks figures up again
@@ -51,9 +68,136 @@ class AskAiViewModel(private val repository: FinanceRepository) : ViewModel() {
     private val _isSending = MutableStateFlow(false)
     private var nextId = 1L
 
-    val uiState: StateFlow<AskAiUiState> = combine(_messages, _isSending) { messages, sending ->
-        AskAiUiState(messages = messages, isSending = sending)
+    // The open chat, saved on this phone after every change (see SavedChats).
+    private var chatId = UUID.randomUUID().toString()
+    private var chatCreatedAt = System.currentTimeMillis()
+    private val _title = MutableStateFlow<String?>(null)
+    private var renamed = false
+    private var pinned = false
+
+    val uiState: StateFlow<AskAiUiState> = combine(
+        _messages, _isSending, _title, AiSettings.state, AssistantPrefs.chatGptModel
+    ) { messages, sending, title, settings, model ->
+        AskAiUiState(
+            messages = messages,
+            isSending = sending,
+            title = title ?: "New chat",
+            chatGptFirst = settings.chain.firstOrNull() == AiProvider.CHATGPT,
+            chatGptModel = model
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AskAiUiState())
+
+    /** Past chats, pinned first. */
+    val chats: StateFlow<List<SavedChat>> = SavedChats.chats
+
+    private val _models = MutableStateFlow<List<ChatGptModel>?>(null)
+    /** The models the ChatGPT plan offers (null until loaded). */
+    val models: StateFlow<List<ChatGptModel>?> = _models.asStateFlow()
+    private val _modelsError = MutableStateFlow<String?>(null)
+    val modelsError: StateFlow<String?> = _modelsError.asStateFlow()
+
+    fun loadModels() {
+        if (_models.value != null) return
+        _modelsError.value = null
+        viewModelScope.launch {
+            runCatching { ChatGptService.availableModels() }
+                .onSuccess { _models.value = it }
+                .onFailure { _modelsError.value = it.message ?: "Couldn't load the models." }
+        }
+    }
+
+    fun selectModel(slug: String?) = AssistantPrefs.setChatGptModel(slug)
+
+    fun currentChatId(): String = chatId
+
+    /** Starts an empty chat; the current one stays in Chats. */
+    fun newChat() {
+        if (_isSending.value) return
+        chatId = UUID.randomUUID().toString()
+        chatCreatedAt = System.currentTimeMillis()
+        _title.value = null
+        renamed = false
+        pinned = false
+        _messages.value = emptyList()
+    }
+
+    /** Reopens a saved chat. Its changes can't be applied again, so their cards show what happened. */
+    fun openChat(id: String) {
+        if (_isSending.value) return
+        val chat = SavedChats.get(id) ?: return
+        viewModelScope.launch {
+            val byId = repository.observeTransactions().first().associateBy { it.id }
+            chatId = chat.id
+            chatCreatedAt = chat.createdAt
+            _title.value = chat.title
+            renamed = chat.renamed
+            pinned = chat.pinned
+            var cardId = 1
+            _messages.value = chat.messages.map { m ->
+                AiChatMessage(
+                    id = nextId++, isUser = m.isUser, text = m.text, isError = m.isError, usedChatGptPlan = m.usedChatGptPlan,
+                    cards = m.cards.map { c ->
+                        val status = runCatching { CardStatus.valueOf(c.status) }.getOrDefault(CardStatus.PENDING)
+                        AdvisorCard(
+                            id = cardId++, title = c.title, lines = c.lines,
+                            transactions = c.transactionIds.mapNotNull { byId[it] },
+                            status = status,
+                            result = c.result ?: if (!c.hadPlan) null else when (status) {
+                                CardStatus.APPLIED -> "Applied"
+                                CardStatus.DISMISSED -> "Dismissed"
+                                CardStatus.UNDONE -> "Applied, then undone"
+                                CardStatus.PENDING -> "Not applied. Ask again to prepare it once more."
+                            }
+                        )
+                    }
+                )
+            }
+        }
+    }
+
+    fun renameChat(id: String, title: String) {
+        SavedChats.rename(id, title)
+        if (id == chatId) {
+            _title.value = SavedChats.get(id)?.title ?: _title.value
+            renamed = true
+        }
+    }
+
+    fun setPinned(id: String, pinned: Boolean) {
+        SavedChats.setPinned(id, pinned)
+        if (id == chatId) this.pinned = pinned
+    }
+
+    fun deleteChat(id: String) {
+        SavedChats.delete(id)
+        if (id == chatId) newChat()
+    }
+
+    private fun persist() {
+        val messages = _messages.value
+        if (messages.isEmpty()) return
+        if (!renamed && _title.value == null) {
+            messages.firstOrNull { it.isUser }?.let { _title.value = SavedChats.titleFrom(it.text) }
+        }
+        SavedChats.save(
+            SavedChat(
+                id = chatId,
+                title = _title.value ?: "Chat",
+                createdAt = chatCreatedAt,
+                updatedAt = System.currentTimeMillis(),
+                pinned = pinned,
+                renamed = renamed,
+                messages = messages.map { m ->
+                    SavedMessage(
+                        isUser = m.isUser, text = m.text, isError = m.isError, usedChatGptPlan = m.usedChatGptPlan,
+                        cards = m.cards.map { c ->
+                            SavedCard(c.title, c.lines, c.status.name, c.result, c.transactions.map { it.id }, hadPlan = c.plan != null || c.result != null)
+                        }
+                    )
+                }
+            )
+        )
+    }
 
     fun sendMessage(text: String) {
         val trimmed = text.trim()
@@ -62,6 +206,7 @@ class AskAiViewModel(private val repository: FinanceRepository) : ViewModel() {
         val history = historyTurns()
         _messages.update { it + AiChatMessage(nextId++, isUser = true, text = trimmed) }
         _isSending.value = true
+        persist()
 
         viewModelScope.launch {
             val snapshot = AdvisorSnapshot.load(repository)
@@ -91,6 +236,7 @@ class AskAiViewModel(private val repository: FinanceRepository) : ViewModel() {
                 }
             }
             _isSending.value = false
+            persist()
         }
     }
 
@@ -130,6 +276,7 @@ class AskAiViewModel(private val repository: FinanceRepository) : ViewModel() {
                 if (message.id != messageId) message else message.copy(cards = message.cards.map { if (it.id == cardId) change(it) else it })
             }
         }
+        persist()
     }
 
     /** Earlier messages, with a note of each card and what the user did with it, so the advisor

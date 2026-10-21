@@ -1,5 +1,7 @@
 package com.financetracker.app.ui.screens.settings
 
+import androidx.compose.material3.Switch
+import com.financetracker.app.data.ai.chat.AssistantPrefs
 import android.content.Intent
 import android.net.Uri
 import android.os.Handler
@@ -128,6 +130,7 @@ fun AiAssistantSettings(modifier: Modifier = Modifier) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        AssistantChoices(chatGptConnected = state.chatGptEmail != null)
     }
 
     editing?.let { provider ->
@@ -324,4 +327,38 @@ private fun ChatGptRow(state: AiSettingsState) {
         )
         else -> Unit
     }
+}
+
+/** The advisor's ChatGPT model and voice switches. */
+@Composable
+private fun AssistantChoices(chatGptConnected: Boolean) {
+    val model by AssistantPrefs.chatGptModel.collectAsState()
+    val readAloud by AssistantPrefs.readAloud.collectAsState()
+    val handsFree by AssistantPrefs.handsFree.collectAsState()
+    if (chatGptConnected) {
+        Text("ChatGPT model", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 16.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                (model ?: "Auto (recommended)") + " · change it from the model button in the AI advisor chat",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            if (model != null) TextButton(onClick = { AssistantPrefs.setChatGptModel(null) }) { Text("Use Auto") }
+        }
+    }
+    Text("Voice", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 16.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Read every answer aloud in the chat", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        Switch(checked = readAloud, onCheckedChange = AssistantPrefs::setReadAloud)
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Hands-free voice mode (listen again after each answer)", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        Switch(checked = handsFree, onCheckedChange = AssistantPrefs::setHandsFree)
+    }
+    Text(
+        "Voice uses your phone's own speech recognition and reading voice, so it costs nothing extra.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
 }

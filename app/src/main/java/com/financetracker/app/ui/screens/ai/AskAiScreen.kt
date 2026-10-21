@@ -1,5 +1,18 @@
 package com.financetracker.app.ui.screens.ai
 
+import com.financetracker.app.ui.components.ScreenHeader
+import com.financetracker.app.ui.components.HeaderButton
+import com.financetracker.app.data.ai.chat.AssistantPrefs
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.border
+import androidx.activity.compose.BackHandler
 import com.financetracker.app.data.ai.chatgpt.ChatGptAuth
 import androidx.compose.ui.platform.LocalContext
 import android.net.Uri
@@ -89,9 +102,27 @@ private val SUGGESTIONS = listOf(
 @Composable
 fun AskAiScreen(viewModel: AskAiViewModel, onBack: () -> Unit) {
     val state by viewModel.uiState.collectAsState()
+    val chats by viewModel.chats.collectAsState()
+    val readAloud by AssistantPrefs.readAloud.collectAsState()
     // Saveable, so a half-written message survives turning the phone.
     var input by rememberSaveable { mutableStateOf("") }
+    var showChats by rememberSaveable { mutableStateOf(false) }
+    var showVoice by rememberSaveable { mutableStateOf(false) }
+    var showModels by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    val speaker = rememberSpeaker()
+
+    BackHandler(enabled = showChats || showVoice) {
+        if (showVoice) speaker.stop()
+        showChats = false
+        showVoice = false
+    }
+
+    // "Read every answer aloud" (Settings > AI advisor): speak each new answer in the text chat.
+    val lastAnswer = state.messages.lastOrNull()?.takeIf { !it.isUser && !it.isError }
+    LaunchedEffect(lastAnswer?.id) {
+        if (readAloud && !showVoice && lastAnswer != null && state.messages.size > 1) speaker.speak(lastAnswer.text)
+    }
 
     // Opened from a "Needs your attention" card: ask its question straight away.
     LaunchedEffect(Unit) {
@@ -110,17 +141,47 @@ fun AskAiScreen(viewModel: AskAiViewModel, onBack: () -> Unit) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("AI advisor") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+            Column(modifier = Modifier.statusBarsPadding().padding(end = 16.dp)) {
+                ScreenHeader(
+                    smallLine = when {
+                        showChats -> "AI advisor"
+                        showVoice -> "AI advisor · voice"
+                        else -> "AI advisor"
+                    },
+                    title = when {
+                        showChats -> "Chats"
+                        showVoice -> "Voice"
+                        else -> state.title
+                    },
+                    onBack = {
+                        when {
+                            showVoice -> { speaker.stop(); showVoice = false }
+                            showChats -> showChats = false
+                            else -> onBack()
+                        }
+                    }
+                ) {
+                    if (!showChats && !showVoice) {
+                        HeaderButton(Icons.Filled.History, "Saved chats") { showChats = true }
+                        HeaderButton(Icons.Filled.Add, "New chat") { speaker.stop(); viewModel.newChat() }
                     }
                 }
-            )
+                if (!showChats && !showVoice && state.chatGptFirst) {
+                    Row(
+                        modifier = Modifier.padding(start = 16.dp, top = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        AssistChip(
+                            onClick = { viewModel.loadModels(); showModels = true },
+                            label = { Text("ChatGPT · " + (state.chatGptModel ?: "Auto")) },
+                            trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null) }
+                        )
+                    }
+                }
+            }
         },
         bottomBar = {
-            if (state.isConfigured) {
+            if (state.isConfigured && !showChats && !showVoice) {
                 val palette = LocalAppPalette.current
                 val canSend = !state.isSending && input.isNotBlank()
                 Column(modifier = Modifier.background(palette.navBar.compositeOver(palette.base)).navigationBarsPadding().imePadding()) {
@@ -144,7 +205,19 @@ fun AskAiScreen(viewModel: AskAiViewModel, onBack: () -> Unit) {
                         )
                         Box(
                             modifier = Modifier
-                                .padding(start = 10.dp, bottom = 4.dp)
+                                .padding(start = 8.dp, bottom = 4.dp)
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                                .clickable(enabled = !state.isSending, role = Role.Button) { showVoice = true }
+                                .semantics { contentDescription = "Talk" },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Filled.Mic, contentDescription = null, modifier = Modifier.size(22.dp))
+                        }
+                        Box(
+                            modifier = Modifier
+                                .padding(start = 8.dp, bottom = 4.dp)
                                 .size(48.dp)
                                 .clip(CircleShape)
                                 .background(palette.gradientBrush(), alpha = if (canSend) 1f else .4f)
@@ -163,6 +236,25 @@ fun AskAiScreen(viewModel: AskAiViewModel, onBack: () -> Unit) {
         }
     ) { padding ->
         when {
+            showChats -> ChatsPanel(
+                chats = chats,
+                currentId = viewModel.currentChatId(),
+                onNewChat = { viewModel.newChat(); showChats = false },
+                onOpen = { viewModel.openChat(it); showChats = false },
+                onRename = viewModel::renameChat,
+                onPin = viewModel::setPinned,
+                onDelete = viewModel::deleteChat,
+                modifier = Modifier.padding(padding)
+            )
+            showVoice -> VoiceMode(
+                lastQuestion = state.messages.lastOrNull { it.isUser }?.text,
+                lastAnswer = state.messages.lastOrNull { !it.isUser }?.text,
+                isThinking = state.isSending,
+                speaker = speaker,
+                onAsk = viewModel::sendMessage,
+                onClose = { showVoice = false },
+                modifier = Modifier.padding(padding)
+            )
             !state.isConfigured -> EmptyState(
                 modifier = Modifier
                     .fillMaxSize()
@@ -200,7 +292,8 @@ fun AskAiScreen(viewModel: AskAiViewModel, onBack: () -> Unit) {
                         message,
                         onApply = { viewModel.apply(message.id, it) },
                         onDismiss = { viewModel.dismiss(message.id, it) },
-                        onUndo = { viewModel.undo(message.id, it) }
+                        onUndo = { viewModel.undo(message.id, it) },
+                        onReadAloud = { speaker.speak(message.text) }
                     )
                 }
                 if (state.isSending) {
@@ -218,10 +311,60 @@ fun AskAiScreen(viewModel: AskAiViewModel, onBack: () -> Unit) {
             }
         }
     }
+
+    if (showModels) {
+        val models by viewModel.models.collectAsState()
+        val modelsError by viewModel.modelsError.collectAsState()
+        ModalBottomSheet(onDismissRequest = { showModels = false }) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Model", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    "Loaded from your ChatGPT plan. Bigger models use more of it. Your choice is kept for new chats too.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                ModelOption("Auto (recommended)", "The model ChatGPT offers apps first", selected = state.chatGptModel == null) {
+                    viewModel.selectModel(null); showModels = false
+                }
+                when {
+                    modelsError != null -> Text(modelsError!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    models == null -> CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    else -> models!!.forEach { model ->
+                        ModelOption(model.name, model.slug, selected = state.chatGptModel == model.slug) {
+                            viewModel.selectModel(model.slug); showModels = false
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
-private fun ChatBubble(message: AiChatMessage, onApply: (Int) -> Unit, onDismiss: (Int) -> Unit, onUndo: (Int) -> Unit) {
+private fun ModelOption(name: String, detail: String, selected: Boolean, onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        border = if (selected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else CardDefaults.outlinedCardBorder()
+    ) {
+        Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(name, style = MaterialTheme.typography.titleSmall)
+                Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (selected) Icon(Icons.Filled.Check, contentDescription = "Selected", tint = MaterialTheme.colorScheme.primary)
+        }
+    }
+}
+
+@Composable
+private fun ChatBubble(
+    message: AiChatMessage,
+    onApply: (Int) -> Unit,
+    onDismiss: (Int) -> Unit,
+    onUndo: (Int) -> Unit,
+    onReadAloud: () -> Unit
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (message.isUser) Arrangement.End else Arrangement.Start
@@ -249,6 +392,12 @@ private fun ChatBubble(message: AiChatMessage, onApply: (Int) -> Unit, onDismiss
             }
             message.cards.forEach { card ->
                 AdvisorCardView(card, onApply = { onApply(card.id) }, onDismiss = { onDismiss(card.id) }, onUndo = { onUndo(card.id) })
+            }
+            if (!message.isUser && !message.isError) {
+                TextButton(onClick = onReadAloud, contentPadding = PaddingValues(horizontal = 4.dp)) {
+                    Icon(Icons.Filled.VolumeUp, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Text("Read aloud", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(start = 4.dp))
+                }
             }
             if (message.usedChatGptPlan) ChatGptPlanNote()
         }
