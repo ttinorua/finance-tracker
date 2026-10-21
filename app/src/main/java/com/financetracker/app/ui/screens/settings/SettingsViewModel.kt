@@ -1,5 +1,6 @@
 package com.financetracker.app.ui.screens.settings
 
+import com.financetracker.app.data.prefs.ViewFilter
 import com.financetracker.app.util.CategoryNames
 import com.financetracker.app.data.bank.CategoryMerge
 import android.content.Context
@@ -161,6 +162,7 @@ class SettingsViewModel(private val repository: FinanceRepository, private val a
         viewModelScope.launch {
             repository.deleteAccount(account)
             MainAccountSettings.onAccountRemoved(account.id)
+            ViewFilter.onAccountRemoved(account.id)
             BankScheduledPayments.onAccountRemoved(account.id)
             BankReservations.onAccountRemoved(account.id)
         }
@@ -207,6 +209,7 @@ class SettingsViewModel(private val repository: FinanceRepository, private val a
             EnableBankingPrefs.remapAccountLink(source.id, target.id)
             repository.deleteAccount(source)
             MainAccountSettings.onAccountRemoved(source.id, replacementId = target.id)
+            ViewFilter.onAccountRemoved(source.id, replacementId = target.id)
             BankScheduledPayments.onAccountRemoved(source.id)
             BankReservations.onAccountRemoved(source.id)
         }

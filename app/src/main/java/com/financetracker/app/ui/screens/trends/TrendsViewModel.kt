@@ -1,5 +1,6 @@
 package com.financetracker.app.ui.screens.trends
 
+import com.financetracker.app.data.prefs.ViewFilter
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.financetracker.app.data.db.entity.Account
@@ -52,14 +53,9 @@ class TrendsViewModel(private val repository: FinanceRepository) : ViewModel() {
 
     private val _granularity = MutableStateFlow(TrendGranularity.MONTH)
     private val _window = MutableStateFlow(TrendsWindow.SIX)
-    private val _selectedAccountId = MutableStateFlow(MainAccountSettings.mainAccountId.value)
+    // Shared with the other tabs (Trends keeps its own 6/12-month range).
+    private val _selectedAccountId = ViewFilter.accountId
     private val _categoryFilter = MutableStateFlow<CategoryFilter>(CategoryFilter.All)
-
-    init {
-        viewModelScope.launch {
-            MainAccountSettings.mainAccountId.drop(1).collect { _selectedAccountId.value = it }
-        }
-    }
 
     val uiState: StateFlow<TrendsUiState> = combine(
         repository.observeTransactions(),

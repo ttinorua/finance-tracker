@@ -1,5 +1,6 @@
 package com.financetracker.app.ui.screens.transactions
 
+import com.financetracker.app.data.prefs.ViewFilter
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.financetracker.app.data.ai.LearnedCategoryRules
@@ -57,15 +58,20 @@ data class TransactionsUiState(
 
 class TransactionsViewModel(private val repository: FinanceRepository) : ViewModel() {
 
-    private val _filter = MutableStateFlow(TransactionFilterState(selectedAccountId = MainAccountSettings.mainAccountId.value))
+    private val _search = MutableStateFlow("")
 
-    init {
-        viewModelScope.launch {
-            MainAccountSettings.mainAccountId.drop(1).collect { selectAccount(it) }
-        }
-    }
+    /** Account and period are shared with the other tabs and remembered (see ViewFilter); the
+     * search text belongs to this screen only. */
+    private val _filter: StateFlow<TransactionFilterState> =
+        combine(ViewFilter.accountId, ViewFilter.period, ViewFilter.customRange, _search) { accountId, period, range, query ->
+            TransactionFilterState(accountId, period, range, query)
+        }.stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            TransactionFilterState(ViewFilter.accountId.value, ViewFilter.period.value, ViewFilter.customRange.value, "")
+        )
 
-    val filter: StateFlow<TransactionFilterState> = _filter.asStateFlow()
+    val filter: StateFlow<TransactionFilterState> = _filter
 
     private val _similarPrompt = MutableStateFlow<SimilarTransactionsPrompt?>(null)
     val similarPrompt: StateFlow<SimilarTransactionsPrompt?> = _similarPrompt.asStateFlow()
@@ -103,19 +109,17 @@ class TransactionsViewModel(private val repository: FinanceRepository) : ViewMod
     )
 
     fun selectAccount(accountId: Long?) {
-        _filter.update { it.copy(selectedAccountId = accountId) }
+        ViewFilter.accountId.value = accountId
     }
 
     fun selectPeriod(option: PeriodOption) {
-        _filter.update { it.copy(periodOption = option) }
+        ViewFilter.period.value = option
     }
 
-    fun selectCustomRange(start: Long, endExclusive: Long) {
-        _filter.update { it.copy(periodOption = PeriodOption.CUSTOM, customRange = start to endExclusive) }
-    }
+    fun selectCustomRange(start: Long, endExclusive: Long) = ViewFilter.selectCustomRange(start, endExclusive)
 
     fun setSearchQuery(query: String) {
-        _filter.update { it.copy(searchQuery = query) }
+        _search.value = query
     }
 
     private fun buildDisplayItems(

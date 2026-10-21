@@ -1,5 +1,6 @@
 package com.financetracker.app
 
+import com.financetracker.app.data.prefs.ViewFilter
 import com.financetracker.app.data.enablebanking.BankAutoSync
 import android.app.Application
 import androidx.work.ExistingWorkPolicy
@@ -50,6 +51,7 @@ class FinanceApp : Application() {
         AiSettings.init(this)
         ThemeSettings.init(this)
         MainAccountSettings.init(this)
+        ViewFilter.init(this)
         BankScheduledPayments.init(this)
         BankReservations.init(this)
         BudgetSettings.init(this)

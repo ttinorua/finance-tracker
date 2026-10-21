@@ -1,5 +1,6 @@
 package com.financetracker.app.ui.screens.dashboard
 
+import com.financetracker.app.data.prefs.ViewFilter
 import com.financetracker.app.data.advisor.AttentionMonitor
 import com.financetracker.app.data.prefs.LoansAndGoals
 import com.financetracker.app.util.advisor.AttentionItem
@@ -113,14 +114,12 @@ private data class DashboardExtras(
 
 class DashboardViewModel(private val repository: FinanceRepository, appContext: Context) : ViewModel() {
 
-    private val _periodOption = MutableStateFlow(PeriodOption.THIS_MONTH)
-    private val _customRange = MutableStateFlow<Pair<Long, Long>?>(null)
-    private val _selectedAccountId = MutableStateFlow(MainAccountSettings.mainAccountId.value)
+    // Shared with Activity, Spending and Trends, and remembered (see ViewFilter).
+    private val _periodOption = ViewFilter.period
+    private val _customRange = ViewFilter.customRange
+    private val _selectedAccountId = ViewFilter.accountId
 
     init {
-        viewModelScope.launch {
-            MainAccountSettings.mainAccountId.drop(1).collect { _selectedAccountId.value = it }
-        }
         // Keeps "Needs your attention" current as transactions, budgets and goals change.
         viewModelScope.launch {
             combine(
@@ -319,10 +318,7 @@ class DashboardViewModel(private val repository: FinanceRepository, appContext: 
         _periodOption.value = option
     }
 
-    fun selectCustomRange(start: Long, endExclusive: Long) {
-        _customRange.value = start to endExclusive
-        _periodOption.value = PeriodOption.CUSTOM
-    }
+    fun selectCustomRange(start: Long, endExclusive: Long) = ViewFilter.selectCustomRange(start, endExclusive)
 
     fun selectAccount(accountId: Long?) {
         _selectedAccountId.value = accountId
