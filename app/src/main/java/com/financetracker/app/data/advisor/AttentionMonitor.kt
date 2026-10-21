@@ -1,5 +1,6 @@
 package com.financetracker.app.data.advisor
 
+import com.financetracker.app.data.prefs.UserAlerts
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -175,7 +176,8 @@ object AttentionMonitor {
             lastSyncFailure = prefs.getString(KEY_SYNC_FAILURE, null),
             backupEnabled = backup.enabled,
             backupLastSuccessAt = backup.lastSuccessAt,
-            backupLastError = backup.lastError
+            backupLastError = backup.lastError,
+            userAlerts = UserAlerts.alerts.value
         )
     }
 

@@ -1,5 +1,10 @@
 package com.financetracker.app.ui.screens.settings
 
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.filled.Delete
+import com.financetracker.app.data.prefs.WeeklySummarySettings
+import com.financetracker.app.data.prefs.UserAlerts
+import com.financetracker.app.data.prefs.AlertKind
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -371,6 +376,59 @@ fun AttentionSettings(modifier: Modifier = Modifier) {
             )
             Text(if (enabled) "Phone notifications on" else "Phone notifications off", modifier = Modifier.padding(start = 8.dp))
         }
+        YourAlerts()
+    }
+}
+
+/** The alerts the person set up (usually by asking the AI advisor), and the weekly AI summary. */
+@Composable
+private fun YourAlerts() {
+    val alerts by UserAlerts.alerts.collectAsState()
+    val weekly by WeeklySummarySettings.enabled.collectAsState()
+    val currency by CurrencySettings.currencyCode.collectAsState()
+    val money = { value: Double -> Formatters.currency(value, currency) }
+
+    Text("Your alerts", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 24.dp))
+    Text(
+        if (alerts.isEmpty()) {
+            "None yet. Ask the AI advisor, e.g. \"Tell me if takeaway goes over 1,000 kr this month\" or " +
+                "\"Warn me about any payment over 3,000 kr\". The app checks them itself, so they don't use the AI."
+        } else {
+            "Checked by the app after each bank sync and once a day. They don't use the AI."
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)
+    )
+    alerts.forEach { alert ->
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(UserAlerts.describe(alert, money), style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    listOfNotNull(
+                        if (alert.kind == AlertKind.CATEGORY_LIMIT) "Monthly" else "Each payment",
+                        alert.warnAtPercent?.takeIf { alert.kind == AlertKind.CATEGORY_LIMIT }?.let { "warns at $it%" }
+                    ).joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(checked = alert.enabled, onCheckedChange = { UserAlerts.setEnabled(alert.id, it) })
+            IconButton(onClick = { UserAlerts.remove(alert.id) }) {
+                Icon(Icons.Filled.Delete, contentDescription = "Delete alert: ${UserAlerts.describe(alert, money)}")
+            }
+        }
+    }
+
+    Text("Weekly AI summary", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 24.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "A short summary of your week every Sunday at 18:00, on Home and as a notification. One short AI request a week.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        Switch(checked = weekly, onCheckedChange = WeeklySummarySettings::setEnabled)
     }
 }
 

@@ -1,5 +1,7 @@
 package com.financetracker.app.util.advisor
 
+import com.financetracker.app.data.prefs.UserAlert
+import com.financetracker.app.data.prefs.AlertKind
 import com.financetracker.app.data.db.entity.Account
 import com.financetracker.app.data.db.entity.Category
 import com.financetracker.app.data.db.entity.TransactionType
@@ -67,7 +69,9 @@ data class AttentionInput(
     val lastSyncFailure: String?,
     val backupEnabled: Boolean,
     val backupLastSuccessAt: Long?,
-    val backupLastError: String?
+    val backupLastError: String?,
+    /** Alerts the person set up (usually by asking the AI advisor). */
+    val userAlerts: List<UserAlert> = emptyList()
 )
 
 /**
@@ -86,6 +90,7 @@ object AttentionChecks {
         // Moving money between your own accounts is never a subscription or an unusual payment.
         val payments = all.filter { !isTransferCategory(it.mainCategoryName, it.categoryName) }
         items += budgets(input)
+        items += userAlerts(input)
         items += recurring(input, payments)
         items += unusual(input, payments)
         items += balances(input)
@@ -142,6 +147,61 @@ object AttentionChecks {
                         prompt = "My $name budget${scopeName?.let { " for $it" } ?: ""} is on track to be exceeded this month. Where is the money going and how can I stay within it?",
                         filter = filter
                     )
+                }
+            }
+        }
+        return items
+    }
+
+    // ---------------------------------------------------------------- the person's own alerts
+
+    private fun userAlerts(input: AttentionInput): List<AttentionItem> {
+        val start = FinanceAnalysis.monthStart(input.now)
+        val month = monthKey(input.now)
+        val items = mutableListOf<AttentionItem>()
+        for (alert in input.userAlerts.filter { it.enabled && it.limit > 0 }) {
+            val scopeName = alert.accountId?.let { id -> input.accounts.firstOrNull { it.id == id }?.name }
+            val expenses = FinanceAnalysis.counted(input.transactions, alert.accountId, input.excludeTransfers, input.shiftSalary, input.mainAccountId)
+                .filter { it.type == TransactionType.EXPENSE }
+            when (alert.kind) {
+                AlertKind.CATEGORY_LIMIT -> {
+                    val categoryId = alert.categoryId ?: continue
+                    val name = input.categories.firstOrNull { it.id == categoryId }?.name ?: alert.categoryName ?: continue
+                    val spent = expenses.filter { it.categoryId == categoryId && it.date >= start }.sumOf { it.amount }
+                    val label = name + (scopeName?.let { " · $it" } ?: "")
+                    val filter = AttentionFilter(name, TransactionType.EXPENSE, categoryId, alert.accountId, thisMonthOnly = true)
+                    val share = spent / alert.limit * 100
+                    when {
+                        spent > alert.limit -> items += AttentionItem(
+                            "alert-over:${alert.id}:$month", AttentionLevel.WARNING,
+                            "$label is over your ${money(input, alert.limit)} alert",
+                            "${money(input, spent)} spent this month (${money(input, spent - alert.limit)} over). You asked to be told.",
+                            notify = true,
+                            prompt = "My $name spending went over the ${money(input, alert.limit)} alert I set. What pushed it over and how can I cut back for the rest of the month?",
+                            filter = filter
+                        )
+                        alert.warnAtPercent != null && share >= alert.warnAtPercent -> items += AttentionItem(
+                            "alert-early:${alert.id}:$month", AttentionLevel.INFO,
+                            "$label at ${pct(share)} of ${money(input, alert.limit)}",
+                            "${money(input, spent)} spent so far this month. Your alert is at ${money(input, alert.limit)}.",
+                            notify = true,
+                            prompt = "I'm at ${pct(share)} of my ${money(input, alert.limit)} alert for $name this month. How do I stay under it?",
+                            filter = filter
+                        )
+                    }
+                }
+                AlertKind.LARGE_PAYMENT -> {
+                    // Only recent payments, so creating an alert doesn't bring up years of old ones.
+                    expenses.filter { it.amount >= alert.limit && input.now - it.date <= 14 * DAY && it.date <= input.now }
+                        .forEach { tx ->
+                            items += AttentionItem(
+                                "alert-big:${alert.id}:${tx.id}", AttentionLevel.INFO,
+                                "Payment over ${money(input, alert.limit)}: ${tx.note.ifBlank { tx.categoryName ?: "a payment" }}",
+                                "${money(input, tx.amount)} on ${date(tx.date)} from ${tx.accountName}.",
+                                notify = true,
+                                prompt = "Tell me about the ${money(input, tx.amount)} payment \"${tx.note}\" on ${date(tx.date)}. Is it a one-off or does it repeat?"
+                            )
+                        }
                 }
             }
         }

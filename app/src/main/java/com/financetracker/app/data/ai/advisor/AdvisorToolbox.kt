@@ -1,5 +1,8 @@
 package com.financetracker.app.data.ai.advisor
 
+import com.financetracker.app.data.prefs.UserAlerts
+import com.financetracker.app.data.prefs.UserAlert
+import com.financetracker.app.data.prefs.AlertKind
 import com.financetracker.app.data.ai.CategorySuggester
 import com.financetracker.app.data.ai.LearnedCategoryRules
 import com.financetracker.app.data.ai.LocalCategoryMatcher
@@ -227,6 +230,32 @@ class AdvisorToolbox(private val snapshot: AdvisorSnapshot) {
             required = listOf("changes")
         ),
         spec(
+            "create_alert",
+            "Prepare an alert the app checks itself after each bank sync and sends as a phone notification: " +
+                "a category going over an amount this month (with an early warning), or any single payment over an amount. Card to Apply.",
+            obj(
+                "kind" to enumStr("category_limit or large_payment.", "category_limit", "large_payment"),
+                "amount" to num("The limit (category_limit: per month) or the payment size (large_payment)."),
+                "category" to str("category_limit: the category, e.g. \"Takeaway\" or \"Food/Takeaway\"."),
+                "warn_at_percent" to num("category_limit: also warn at this % of the limit (default 80; 0 = no early warning)."),
+                "account" to str("Only this account (name); omit for all accounts.")
+            ),
+            required = listOf("kind", "amount")
+        ),
+        spec("list_alerts", "The alerts the user has set up, with their ids.", obj()),
+        spec(
+            "remove_alert",
+            "Prepare removing one of the user's alerts (id from list_alerts). Card to Apply.",
+            obj("id" to str("The alert's id.")),
+            required = listOf("id")
+        ),
+        spec(
+            "set_weekly_summary",
+            "Prepare switching the weekly AI summary (Sundays 18:00, on Home and as a notification) on or off. Card to Apply.",
+            obj("enabled" to bool("true = on.")),
+            required = listOf("enabled")
+        ),
+        spec(
             "create_category",
             "Prepare a new category. Shows a card the user must Apply.",
             obj(
@@ -290,6 +319,10 @@ class AdvisorToolbox(private val snapshot: AdvisorSnapshot) {
             "set_budgets" -> setBudgets(a)
             "set_fixed_categories" -> setFixed(a)
             "create_category" -> createCategory(a)
+            "create_alert" -> createAlert(a)
+            "list_alerts" -> listAlerts()
+            "remove_alert" -> removeAlert(a)
+            "set_weekly_summary" -> setWeeklySummary(a)
             "save_loan" -> saveLoan(a)
             "save_goal" -> saveGoal(a)
             else -> "Error: there's no function called ${call.name}."
@@ -701,6 +734,68 @@ class AdvisorToolbox(private val snapshot: AdvisorSnapshot) {
             )
         )
         return "Prepared card #${card.id} to create $main/$name. Nothing has changed yet — the user taps Apply."
+    }
+
+    private fun createAlert(a: JSONObject): String {
+        val amount = number(a, "amount")?.takeIf { it > 0 } ?: return "Error: amount must be above 0."
+        val (accountId, error) = account(a)
+        if (error != null) return error
+        val alert = when (a.optString("kind")) {
+            "large_payment" -> UserAlert(kind = AlertKind.LARGE_PAYMENT, limit = amount, accountId = accountId)
+            "category_limit" -> {
+                val name = text(a, "category") ?: return "Error: category_limit needs a category."
+                val category = findCategory(name, null, TransactionType.EXPENSE)
+                    ?: CategoryNames.existing(snapshot.categories, name.substringAfterLast('/').trim(), TransactionType.EXPENSE)
+                    ?: return "Error: no expense category called \"$name\". Use list_categories."
+                val warn = number(a, "warn_at_percent")?.toInt() ?: 80
+                UserAlert(
+                    kind = AlertKind.CATEGORY_LIMIT, limit = amount, categoryId = category.id, categoryName = category.name,
+                    accountId = accountId, warnAtPercent = warn.takeIf { it in 1..99 }
+                )
+            }
+            else -> return "Error: kind must be category_limit or large_payment."
+        }
+        val scope = scopeName(accountId)
+        val lines = when (alert.kind) {
+            AlertKind.CATEGORY_LIMIT -> listOf(
+                "When: ${alert.categoryName} goes over ${money(amount)} in a month",
+                alert.warnAtPercent?.let { "Early warning: at $it%" } ?: "No early warning",
+                "Accounts: $scope"
+            )
+            AlertKind.LARGE_PAYMENT -> listOf("When: any single payment of ${money(amount)} or more", "Accounts: $scope")
+        }
+        val card = addCard(AdvisorCard(0, "New alert", lines = lines + "Checked by the app after each bank sync; sent as a notification.", plan = ActionPlan.SaveAlert(alert)))
+        return "Prepared card #${card.id} for the alert (${lines.first()}). Nothing has changed yet — the user taps Apply. " +
+            "The app checks it itself, so it doesn't use the AI."
+    }
+
+    private fun listAlerts(): String {
+        val alerts = UserAlerts.alerts.value
+        if (alerts.isEmpty()) return "The user has no alerts yet."
+        return alerts.joinToString("\n") { alert ->
+            "- id ${alert.id}: ${UserAlerts.describe(alert, ::money)}" +
+                (alert.warnAtPercent?.takeIf { alert.kind == AlertKind.CATEGORY_LIMIT }?.let { ", early warning at $it%" } ?: "") +
+                ", ${scopeName(alert.accountId)}" + if (alert.enabled) "" else " (switched off)"
+        }
+    }
+
+    private fun removeAlert(a: JSONObject): String {
+        val id = text(a, "id") ?: return "Error: id is required."
+        val alert = UserAlerts.alerts.value.firstOrNull { it.id == id } ?: return "Error: no alert with id $id. Use list_alerts."
+        val card = addCard(AdvisorCard(0, "Remove alert", lines = listOf(UserAlerts.describe(alert, ::money)), plan = ActionPlan.RemoveAlert(alert)))
+        return "Prepared card #${card.id} to remove the alert. Nothing has changed yet — the user taps Apply."
+    }
+
+    private fun setWeeklySummary(a: JSONObject): String {
+        val on = a.optBoolean("enabled", true)
+        val card = addCard(
+            AdvisorCard(
+                0, if (on) "Weekly summary on" else "Weekly summary off",
+                lines = listOf(if (on) "A short AI summary of your week every Sunday at 18:00, on Home and as a notification." else "No more Sunday summaries."),
+                plan = ActionPlan.SetWeeklySummary(on)
+            )
+        )
+        return "Prepared card #${card.id}. Nothing has changed yet — the user taps Apply."
     }
 
     private fun saveLoan(a: JSONObject): String {
