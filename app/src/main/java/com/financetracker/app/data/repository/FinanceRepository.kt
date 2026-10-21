@@ -1,5 +1,6 @@
 package com.financetracker.app.data.repository
 
+import androidx.room.withTransaction
 import com.financetracker.app.data.db.AppDatabase
 import com.financetracker.app.data.db.entity.Account
 import com.financetracker.app.data.db.entity.Category
@@ -44,6 +45,15 @@ class FinanceRepository(private val db: AppDatabase) {
     suspend fun upsertCategory(category: Category): Long = categoryDao.insert(category)
     suspend fun updateCategory(category: Category) = categoryDao.update(category)
     suspend fun deleteCategory(category: Category) = categoryDao.delete(category)
+
+    /** Moves every transaction and receipt line from [from] onto [toId], then deletes [from]. */
+    suspend fun mergeCategoryInto(from: Category, toId: Long) {
+        db.withTransaction {
+            transactionDao.moveCategory(from.id, toId)
+            receiptDao.moveCategory(from.id, toId)
+            categoryDao.delete(from)
+        }
+    }
 
     suspend fun getOrCreateCategory(
         mainCategory: String,

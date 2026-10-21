@@ -13,6 +13,9 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ReceiptDao {
+    @Query("UPDATE receipt_items SET categoryId = :toId WHERE categoryId = :fromId")
+    suspend fun moveCategory(fromId: Long, toId: Long)
+
     @Query("SELECT * FROM receipts ORDER BY purchasedAt DESC")
     fun observeAll(): Flow<List<Receipt>>
 

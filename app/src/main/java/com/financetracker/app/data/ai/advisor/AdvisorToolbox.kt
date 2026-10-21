@@ -19,6 +19,7 @@ import com.financetracker.app.data.prefs.LoansAndGoals
 import com.financetracker.app.data.prefs.MainAccountSettings
 import com.financetracker.app.data.prefs.SavingsGoal
 import com.financetracker.app.data.repository.FinanceRepository
+import com.financetracker.app.util.CategoryNames
 import com.financetracker.app.util.advisor.FinanceAnalysis
 import com.financetracker.app.util.advisor.FinanceCalculators
 import com.financetracker.app.util.advisor.GoalTracking
@@ -609,10 +610,12 @@ class AdvisorToolbox(private val snapshot: AdvisorSnapshot) {
         }
         if (txs.isEmpty()) return "No transactions match, so nothing was prepared. Check with find_transactions."
         val type = txs.groupingBy { it.type }.eachCount().maxByOrNull { it.value }!!.key
+        // A differently spelled or placed name ("Take away" for Food › Takeaway) is the same category.
         val existing = findCategory(targetName, targetMain, type)
+            ?: CategoryNames.existing(snapshot.categories.filter { it.id !in uncategorizedIds }, targetName.substringAfterLast('/').substringAfterLast('›').trim(), type)
         val newCategory = if (existing == null) {
             targetMain ?: return "Error: there's no category \"$targetName\"; give to_main_category to create it, or pick one from list_categories."
-            Category(name = targetName.trim(), mainCategory = targetMain.trim(), type = type)
+            Category(name = targetName.trim(), mainCategory = CategoryNames.canonicalMain(snapshot.categories, targetMain), type = type)
         } else {
             null
         }
@@ -685,13 +688,16 @@ class AdvisorToolbox(private val snapshot: AdvisorSnapshot) {
         val main = text(a, "main_category") ?: return "Error: main_category is required."
         val name = text(a, "name") ?: return "Error: name is required."
         val type = if (a.optString("type") == "income") TransactionType.INCOME else TransactionType.EXPENSE
-        findCategory(name, main, type)?.takeIf { it.mainCategory.equals(main, true) }?.let {
-            return "The category ${it.mainCategory}/${it.name} already exists."
+        // Never a second copy: the same name (ignoring capitals, spaces, "&"/"and", plurals) in
+        // any main category is the same category.
+        CategoryNames.existing(snapshot.categories, name, type)?.let {
+            return "The category ${it.mainCategory}/${it.name} already exists, so no new one was prepared. Use that one."
         }
+        val mainName = CategoryNames.canonicalMain(snapshot.categories, main)
         val card = addCard(
             AdvisorCard(
-                0, "New category", lines = listOf("$main › $name (${type.name.lowercase()})"),
-                plan = ActionPlan.CreateCategory(Category(name = name, mainCategory = main, type = type))
+                0, "New category", lines = listOf("$mainName › $name (${type.name.lowercase()})"),
+                plan = ActionPlan.CreateCategory(Category(name = name, mainCategory = mainName, type = type))
             )
         )
         return "Prepared card #${card.id} to create $main/$name. Nothing has changed yet — the user taps Apply."

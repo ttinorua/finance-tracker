@@ -51,6 +51,14 @@ object LearnedCategoryRules {
         }
     }
 
+    /** Points every learned note that pointed at [fromId] at [toId] instead (a merged category). */
+    fun remapCategory(fromId: Long, toId: Long) {
+        if (_rules.value.values.none { it == fromId }) return
+        val updated = _rules.value.mapValues { (_, id) -> if (id == fromId) toId else id }
+        _rules.value = updated
+        if (::prefs.isInitialized) prefs.edit().putString(KEY_RULES, serialize(updated)).apply()
+    }
+
     /** Returns a real [Category] from [categories] for [note]'s learned mapping, or null if there
      * isn't one (or the mapped category no longer exists) — a null here means "fall through to
      * [LocalCategoryMatcher]/AI", never "categorize as nothing". */

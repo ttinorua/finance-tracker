@@ -1,5 +1,7 @@
 package com.financetracker.app.ui.screens.settings
 
+import com.financetracker.app.util.CategoryNames
+import com.financetracker.app.data.bank.CategoryMerge
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -229,8 +231,33 @@ class SettingsViewModel(private val repository: FinanceRepository, private val a
 
     fun addCategory(mainCategory: String, name: String, type: TransactionType, icon: String? = null) {
         viewModelScope.launch {
-            val id = repository.upsertCategory(Category(name = name, mainCategory = mainCategory, type = type))
+            val categories = repository.getCategories()
+            // Never a second copy of a category that's already there, under any main category.
+            CategoryNames.existing(categories, name, type)?.let {
+                _categoryMessage.value = "${it.mainCategory} › ${it.name} already exists, so no new category was added."
+                return@launch
+            }
+            val main = CategoryNames.canonicalMain(categories, mainCategory)
+            val id = repository.upsertCategory(Category(name = name.trim(), mainCategory = main, type = type))
             if (icon != null && id > 0) CategoryIconChoices.set(id, icon)
+        }
+    }
+
+    private val _categoryMessage = MutableStateFlow<String?>(null)
+    /** A one-off note for the Categories page (a refused duplicate, or what a merge did). */
+    val categoryMessage: StateFlow<String?> = _categoryMessage.asStateFlow()
+    fun clearCategoryMessage() { _categoryMessage.value = null }
+
+    /** Duplicate categories right now, refreshed whenever the categories or transactions change. */
+    val duplicateCategories: StateFlow<List<CategoryNames.Duplicate>> =
+        combine(repository.observeCategories(), repository.observeTransactions()) { _, _ -> CategoryMerge.findDuplicates(repository) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun mergeDuplicateCategories() {
+        viewModelScope.launch {
+            val removed = CategoryMerge.mergeAll(repository)
+            _categoryMessage.value = if (removed == 0) "No duplicates left to merge." else
+                "Merged $removed duplicate ${if (removed == 1) "category" else "categories"}. Their transactions and budgets moved over."
         }
     }
 

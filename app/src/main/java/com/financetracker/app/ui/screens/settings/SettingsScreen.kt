@@ -257,10 +257,46 @@ fun SettingsScreen(
                 SettingsPage.CATEGORIES -> {
                     val grouped = state.categories.groupBy { it.mainCategory }.toSortedMap()
                     val allExpanded = collapsedMains.isEmpty()
+                    val duplicates by viewModel.duplicateCategories.collectAsState()
+                    val categoryMessage by viewModel.categoryMessage.collectAsState()
+                    var confirmMerge by remember { mutableStateOf(false) }
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(16.dp)
                     ) {
+                        categoryMessage?.let { message ->
+                            item(key = "category_message") {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(message, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                                    TextButton(onClick = viewModel::clearCategoryMessage) { Text("OK") }
+                                }
+                            }
+                        }
+                        if (duplicates.isNotEmpty()) {
+                            item(key = "category_duplicates") {
+                                Card(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+                                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        val extra = duplicates.sumOf { it.remove.size }
+                                        Text(
+                                            "$extra duplicate ${if (extra == 1) "category" else "categories"} found",
+                                            style = MaterialTheme.typography.titleSmall
+                                        )
+                                        Text(
+                                            duplicates.joinToString("\n") { d ->
+                                                "${d.keep.mainCategory} › ${d.keep.name} ← " +
+                                                    d.remove.joinToString { "${it.mainCategory} › ${it.name}" }
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Button(onClick = { confirmMerge = true }) { Text("Merge duplicates") }
+                                    }
+                                }
+                            }
+                        }
                         item(key = "category_tools") {
                             Row(
                                 modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
@@ -326,6 +362,30 @@ fun SettingsScreen(
                                 }
                             }
                         }
+                    }
+                    if (confirmMerge) {
+                        AlertDialog(
+                            onDismissRequest = { confirmMerge = false },
+                            title = { Text("Merge duplicate categories?") },
+                            text = {
+                                Text(
+                                    "Each pair becomes one category: the one on the left of the arrow is kept, and " +
+                                        "the transactions, receipt lines, budgets, Fixe marks and learned notes of the " +
+                                        "others move onto it. Then the extra copies are removed.\n\n" +
+                                        duplicates.joinToString("\n") { d ->
+                                            "${d.keep.mainCategory} › ${d.keep.name} ← " +
+                                                d.remove.joinToString { "${it.mainCategory} › ${it.name}" }
+                                        }
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    confirmMerge = false
+                                    viewModel.mergeDuplicateCategories()
+                                }) { Text("Merge") }
+                            },
+                            dismissButton = { TextButton(onClick = { confirmMerge = false }) { Text("Cancel") } }
+                        )
                     }
                 }
 
