@@ -1,5 +1,6 @@
 package com.financetracker.app.ui.screens.dashboard
 
+import com.financetracker.app.data.ai.WeeklySummary
 import com.financetracker.app.data.prefs.ViewFilter
 import com.financetracker.app.data.advisor.AttentionMonitor
 import com.financetracker.app.data.prefs.LoansAndGoals
@@ -12,14 +13,11 @@ import androidx.lifecycle.viewModelScope
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.financetracker.app.data.ai.AiService
-import com.financetracker.app.data.ai.InsightCard
-import com.financetracker.app.data.ai.InsightTone
 import com.financetracker.app.data.db.entity.Account
 import com.financetracker.app.data.db.entity.Category
 import com.financetracker.app.data.db.entity.CategorySpend
 import com.financetracker.app.data.db.entity.TransactionType
 import com.financetracker.app.data.enablebanking.EnableBankingSyncWorker
-import com.financetracker.app.data.prefs.AiInsightsCache
 import com.financetracker.app.data.prefs.BankScheduledPayments
 import com.financetracker.app.data.prefs.BudgetLimits
 import com.financetracker.app.data.prefs.BudgetSettings
@@ -324,66 +322,27 @@ class DashboardViewModel(private val repository: FinanceRepository, appContext: 
         _selectedAccountId.value = accountId
     }
 
-    private val _isGeneratingInsights = MutableStateFlow(false)
-    val isGeneratingInsights: StateFlow<Boolean> = _isGeneratingInsights.asStateFlow()
+    private val _isMakingSummary = MutableStateFlow(false)
+    val isMakingSummary: StateFlow<Boolean> = _isMakingSummary.asStateFlow()
+    private val _summaryError = MutableStateFlow<String?>(null)
+    val summaryError: StateFlow<String?> = _summaryError.asStateFlow()
 
-    fun generateInsights() {
-        if (_isGeneratingInsights.value) return
-        _isGeneratingInsights.value = true
-
+    /** "Refresh now" on the AI summary card: a summary of the period and account on screen. */
+    fun refreshSummary() {
+        if (_isMakingSummary.value) return
+        _isMakingSummary.value = true
+        _summaryError.value = null
         viewModelScope.launch {
-            val current = uiState.value
-            val currencyCode = CurrencySettings.currencyCode.value
-            val systemPrompt =
-                "You are a friendly personal finance assistant embedded in the user's finance-tracking app. " +
-                    "Identify 2-4 specific, useful observations about their spending this period using the " +
-                    "numbers provided, and present them via the present_insights tool. Be concrete with " +
-                    "amounts and category names. Avoid generic advice like 'track your spending' or " +
-                    "'create a budget'."
-            val summary = buildString {
-                appendLine("Currency: $currencyCode")
-                appendLine("Period income: ${current.periodIncome}")
-                appendLine("Period expense: ${current.periodExpense}")
-                appendLine("Spending by category (mainCategory / category: total):")
-                current.categoryBreakdown.forEach {
-                    appendLine("- ${it.mainCategory} / ${it.categoryName}: ${it.total}")
-                }
-            }
-
-            AiService.generateInsights(systemPrompt, summary, maxTokens = 600L)
-                .onSuccess { cards ->
-                    AiInsightsCache.save(
-                        cards.ifEmpty {
-                            listOf(
-                                InsightCard(
-                                    label = "Insights",
-                                    value = "—",
-                                    detail = "Couldn't generate insights this time — try again.",
-                                    tone = InsightTone.NEUTRAL
-                                )
-                            )
-                        }
-                    )
-                }
-                .onFailure { error ->
-                    AiInsightsCache.save(
-                        listOf(
-                            InsightCard(
-                                label = "Insights",
-                                value = "—",
-                                detail = "Couldn't generate insights: ${error.message}",
-                                tone = InsightTone.WARNING
-                            )
-                        )
-                    )
-                }
-            _isGeneratingInsights.value = false
+            val period = ViewFilter.period.value
+            val (from, to) = periodRange(period, ViewFilter.customRange.value)
+            runCatching {
+                WeeklySummary.make(repository, ViewFilter.accountId.value, from, to, period.label, automatic = false)
+            }.onFailure { _summaryError.value = "Couldn't make a summary: ${it.message}" }
+            _isMakingSummary.value = false
         }
     }
 
-    fun dismissInsights() {
-        AiInsightsCache.clear()
-    }
+    fun hideSummary() = WeeklySummary.hide()
 }
 
 /** For a specific account, its own budget. For "All accounts" (null), the combined total of

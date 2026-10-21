@@ -1,5 +1,7 @@
 package com.financetracker.app.ui.screens.dashboard
 
+import com.financetracker.app.data.ai.AiSummary
+import com.financetracker.app.data.ai.WeeklySummary
 import com.financetracker.app.ui.components.HeaderButton
 import com.financetracker.app.ui.components.ScreenHeader
 import com.financetracker.app.ui.screens.household.attentionItems
@@ -79,10 +81,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.financetracker.app.data.advisor.AttentionMonitor
 import com.financetracker.app.data.ai.AiService
-import com.financetracker.app.data.ai.InsightCard
-import com.financetracker.app.data.ai.InsightTone
 import com.financetracker.app.data.db.entity.TransactionType
-import com.financetracker.app.data.prefs.AiInsightsCache
 import com.financetracker.app.data.prefs.CurrencySettings
 import com.financetracker.app.ui.components.AccountSelectorChip
 import com.financetracker.app.ui.components.AiOrb
@@ -126,8 +125,9 @@ fun DashboardScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val currencyCode by CurrencySettings.currencyCode.collectAsState()
-    val insights by AiInsightsCache.insights.collectAsState()
-    val isGeneratingInsights by viewModel.isGeneratingInsights.collectAsState()
+    val summary by WeeklySummary.summary.collectAsState()
+    val isMakingSummary by viewModel.isMakingSummary.collectAsState()
+    val summaryError by viewModel.summaryError.collectAsState()
     val isSyncing by viewModel.isSyncing.collectAsState()
     val lastSyncedAt by viewModel.lastSyncedAt.collectAsState()
     val monitorItems by viewModel.attentionItems.collectAsState()
@@ -149,8 +149,9 @@ fun DashboardScreen(
     DashboardContent(
         state = state,
         currencyCode = currencyCode,
-        insights = insights,
-        isGeneratingInsights = isGeneratingInsights,
+        summary = summary,
+        isMakingSummary = isMakingSummary,
+        summaryError = summaryError,
         isSyncing = isSyncing,
         lastSyncedAt = lastSyncedAt,
         attentionItems = attentionItems,
@@ -161,8 +162,8 @@ fun DashboardScreen(
         onSelectCustomRange = viewModel::selectCustomRange,
         onSelectAccount = viewModel::selectAccount,
         onDismissAttention = viewModel::dismissAttention,
-        onGenerateInsights = viewModel::generateInsights,
-        onDismissInsights = viewModel::dismissInsights,
+        onRefreshSummary = viewModel::refreshSummary,
+        onHideSummary = viewModel::hideSummary,
         onOpenAskAi = onOpenAskAi,
         onOpenTrends = onOpenTrends,
         onOpenBreakdown = onOpenBreakdown,
@@ -175,8 +176,9 @@ fun DashboardScreen(
 fun DashboardContent(
     state: DashboardUiState,
     currencyCode: String,
-    insights: List<InsightCard>,
-    isGeneratingInsights: Boolean,
+    summary: AiSummary?,
+    isMakingSummary: Boolean,
+    summaryError: String?,
     isSyncing: Boolean,
     lastSyncedAt: Long?,
     attentionItems: List<AttentionItem>,
@@ -187,8 +189,8 @@ fun DashboardContent(
     onSelectCustomRange: (Long, Long) -> Unit,
     onSelectAccount: (Long?) -> Unit,
     onDismissAttention: (String) -> Unit,
-    onGenerateInsights: () -> Unit,
-    onDismissInsights: () -> Unit,
+    onRefreshSummary: () -> Unit,
+    onHideSummary: () -> Unit,
     onOpenAskAi: () -> Unit,
     onOpenTrends: () -> Unit,
     /** Tiles and the overall budget open the main categories behind them first; [upcoming] adds
@@ -319,12 +321,16 @@ fun DashboardContent(
         }
         if (aiConfigured) {
             item {
-                InsightCardView(
-                    insights = insights,
-                    isGenerating = isGeneratingInsights,
-                    onGenerate = onGenerateInsights,
-                    onDismiss = onDismissInsights,
-                    onFollowUp = onOpenAskAi
+                SummaryCard(
+                    summary = summary,
+                    isMaking = isMakingSummary,
+                    error = summaryError,
+                    onRefresh = onRefreshSummary,
+                    onHide = onHideSummary,
+                    onAsk = { prompt ->
+                        AdvisorLaunch.ask(prompt)
+                        onOpenAskAi()
+                    }
                 )
             }
         }
@@ -614,88 +620,6 @@ private fun Link(text: String, onClick: () -> Unit) {
 }
 
 /** The AI's read on the period, framed in the AI gradient. */
-@Composable
-private fun InsightCardView(
-    insights: List<InsightCard>,
-    isGenerating: Boolean,
-    onGenerate: () -> Unit,
-    onDismiss: () -> Unit,
-    onFollowUp: () -> Unit
-) {
-    val palette = LocalAppPalette.current
-    GlassCard(modifier = Modifier.fillMaxWidth(), aiBorder = true) {
-        Column(modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Filled.AutoAwesome, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))
-                Text(
-                    "AI insight",
-                    style = MaterialTheme.typography.titleSmall.merge(TextStyle(brush = palette.gradientBrush())),
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(start = 8.dp).weight(1f)
-                )
-                if (isGenerating) {
-                    CircularProgressIndicator(modifier = Modifier.padding(12.dp).size(18.dp), strokeWidth = 2.dp)
-                } else if (insights.isNotEmpty()) {
-                    IconButton(onClick = onGenerate) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "Regenerate", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
-                    }
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Filled.Close, contentDescription = "Dismiss insights", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
-                    }
-                } else {
-                    Spacer(Modifier.height(48.dp))
-                }
-            }
-            Column(modifier = Modifier.padding(end = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (insights.isEmpty()) {
-                    Text(
-                        "A quick read on your spending this period — what stands out and what to do about it.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (!isGenerating) Link("Get insights", onGenerate)
-                } else {
-                    insights.forEach { InsightLine(it) }
-                    Row(
-                        modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onFollowUp).padding(vertical = 6.dp, horizontal = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Ask a follow-up", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowForward,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(start = 4.dp).size(14.dp)
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** One insight: its label, the headline figure (in the AI gradient, or green/red when it's good or
- * bad news) and a line of context. */
-@Composable
-private fun InsightLine(card: InsightCard) {
-    val palette = LocalAppPalette.current
-    val valueStyle = when (card.tone) {
-        InsightTone.POSITIVE -> TextStyle(color = palette.positive)
-        InsightTone.WARNING -> TextStyle(color = palette.negative)
-        InsightTone.NEUTRAL -> TextStyle(brush = palette.gradientBrush())
-    }
-    Column {
-        Text(card.label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(
-            card.value,
-            style = MaterialTheme.typography.titleMedium.merge(valueStyle),
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(top = 1.dp)
-        )
-        Text(card.detail, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 1.dp))
-    }
-}
-
 /** "Needs your attention": what the app's checks found (see AttentionChecks), most important
  * first. Only shown when there's something; each item can be opened, taken to the advisor or
  * dismissed. */

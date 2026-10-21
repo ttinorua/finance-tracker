@@ -1,6 +1,6 @@
 package com.financetracker.app
 
-import com.financetracker.app.data.prefs.WeeklySummarySettings
+import com.financetracker.app.data.ai.WeeklySummary
 import com.financetracker.app.data.prefs.UserAlerts
 import com.financetracker.app.data.ai.chat.AssistantPrefs
 import com.financetracker.app.data.ai.chat.SavedChats
@@ -59,7 +59,7 @@ class FinanceApp : Application() {
         SavedChats.init(this)
         AssistantPrefs.init(this)
         UserAlerts.init(this)
-        WeeklySummarySettings.init(this) { }
+        WeeklySummary.init(this)
         BankScheduledPayments.init(this)
         BankReservations.init(this)
         BudgetSettings.init(this)
