@@ -231,7 +231,8 @@ class MainActivity : ComponentActivity() {
                             TrendsScreen(
                                 vm,
                                 onBack = { navController.popBackStack() },
-                                onOpenTransactions = { drillDown -> navController.navigate(drillDown.drillRoute()) }
+                                onOpenTransactions = { drillDown -> navController.navigate(drillDown.drillRoute()) },
+                                onOpenAskAi = { navController.navigate("ask_ai") }
                             )
                         }
                         composable("household") {
@@ -261,7 +262,7 @@ class MainActivity : ComponentActivity() {
                             val vm: TransactionsViewModel = viewModel(
                                 factory = ViewModelFactory { TransactionsViewModel(repository) }
                             )
-                            TransactionsScreen(vm)
+                            TransactionsScreen(vm, onOpenAskAi = { navController.navigate("ask_ai") })
                         }
                         composable(Screen.Overview.route) {
                             val vm: CategoryOverviewViewModel = viewModel(
@@ -270,6 +271,8 @@ class MainActivity : ComponentActivity() {
                             CategoryOverviewScreen(
                                 vm,
                                 onOpenTransactions = { drillDown -> navController.navigate(drillDown.drillRoute()) },
+                                onOpenTrends = { navController.navigate("trends") },
+                                onOpenAskAi = { navController.navigate("ask_ai") },
                                 shopping = { modifier ->
                                     val shoppingVm: ShoppingViewModel = viewModel(factory = ViewModelFactory { ShoppingViewModel(repository) })
                                     ShoppingTab(

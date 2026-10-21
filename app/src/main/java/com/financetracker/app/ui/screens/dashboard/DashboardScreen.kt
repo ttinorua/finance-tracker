@@ -1,5 +1,7 @@
 package com.financetracker.app.ui.screens.dashboard
 
+import com.financetracker.app.ui.components.HeaderButton
+import com.financetracker.app.ui.components.ScreenHeader
 import com.financetracker.app.ui.screens.household.attentionItems
 import com.financetracker.app.ui.screens.household.HouseholdHomeCard
 import com.financetracker.app.data.household.HouseholdSync
@@ -446,33 +448,12 @@ private fun Header(
     onOpenTrends: () -> Unit,
     onOpenAskAi: () -> Unit
 ) {
-    Row(modifier = Modifier.fillMaxWidth().padding(start = 4.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                greeting() + (syncLine?.let { " · $it" } ?: ""),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(title, style = MaterialTheme.typography.headlineSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
+    // The shared header (Activity, Spending and Trends use the same one).
+    ScreenHeader(smallLine = greeting() + (syncLine?.let { " · $it" } ?: ""), title = title, onOpenAskAi = onOpenAskAi) {
         if (isSyncing) {
-            CircularProgressIndicator(modifier = Modifier.padding(end = 12.dp).size(18.dp), strokeWidth = 2.dp)
+            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
         }
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
-                .clickable(onClick = onOpenTrends),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(Icons.AutoMirrored.Filled.ShowChart, contentDescription = "Trends", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-        }
-        Spacer(Modifier.width(10.dp))
-        AiOrb(42.dp, contentDescription = "AI advisor", onClick = onOpenAskAi)
+        HeaderButton(Icons.AutoMirrored.Filled.ShowChart, "Trends", onOpenTrends)
     }
 }
 

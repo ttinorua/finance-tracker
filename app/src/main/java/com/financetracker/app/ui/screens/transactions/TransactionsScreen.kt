@@ -1,5 +1,12 @@
 package com.financetracker.app.ui.screens.transactions
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.statusBarsPadding
+import com.financetracker.app.ui.components.AccountSelectorChip
+import com.financetracker.app.ui.components.periodTitle
+import com.financetracker.app.ui.components.HeaderButton
+import com.financetracker.app.ui.components.ScreenHeader
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -49,7 +56,7 @@ import com.financetracker.app.ui.components.TransactionRow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TransactionsScreen(viewModel: TransactionsViewModel) {
+fun TransactionsScreen(viewModel: TransactionsViewModel, onOpenAskAi: () -> Unit = {}) {
     val state by viewModel.uiState.collectAsState()
     // The search text comes straight from the filter, not from the (background-built) list,
     // so typing never lags or jumps.
@@ -63,49 +70,45 @@ fun TransactionsScreen(viewModel: TransactionsViewModel) {
 
     Scaffold(
         topBar = {
-            Surface {
-                androidx.compose.foundation.layout.Column {
-                    TopAppBar(
-                        title = {
-                            if (searchActive) {
-                                OutlinedTextField(
-                                    value = filter.searchQuery,
-                                    onValueChange = viewModel::setSearchQuery,
-                                    placeholder = { Text("Search note, category, amount") },
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                            } else {
-                                AccountFilterButton(
-                                    accounts = state.allAccounts,
-                                    selectedId = filter.selectedAccountId,
-                                    onSelected = viewModel::selectAccount
-                                )
-                            }
-                        },
-                        actions = {
-                            if (searchActive) {
-                                IconButton(onClick = {
-                                    searchActive = false
-                                    viewModel.setSearchQuery("")
-                                }) {
-                                    Icon(Icons.Filled.Close, contentDescription = "Close search")
-                                }
-                            } else {
-                                IconButton(onClick = { searchActive = true }) {
-                                    Icon(Icons.Filled.Search, contentDescription = "Search")
-                                }
-                            }
-                        }
-                    )
-                    Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                        PeriodSelectorChip(
-                            option = filter.periodOption,
-                            customRange = filter.customRange,
-                            onOptionSelected = viewModel::selectPeriod,
-                            onCustomRangeSelected = viewModel::selectCustomRange
-                        )
+            // Same header as Home: the shared account and period chips, search and the AI orb.
+            androidx.compose.foundation.layout.Column(modifier = Modifier.statusBarsPadding().padding(horizontal = 16.dp)) {
+                ScreenHeader(
+                    smallLine = "Activity",
+                    title = periodTitle(filter.periodOption),
+                    onOpenAskAi = onOpenAskAi
+                ) {
+                    HeaderButton(
+                        icon = if (searchActive) Icons.Filled.Close else Icons.Filled.Search,
+                        contentDescription = if (searchActive) "Close search" else "Search"
+                    ) {
+                        if (searchActive) viewModel.setSearchQuery("")
+                        searchActive = !searchActive
                     }
+                }
+                if (searchActive) {
+                    OutlinedTextField(
+                        value = filter.searchQuery,
+                        onValueChange = viewModel::setSearchQuery,
+                        placeholder = { Text("Search note, category, amount") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                    )
+                }
+                Row(
+                    modifier = Modifier.padding(vertical = 10.dp).horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    PeriodSelectorChip(
+                        option = filter.periodOption,
+                        customRange = filter.customRange,
+                        onOptionSelected = viewModel::selectPeriod,
+                        onCustomRangeSelected = viewModel::selectCustomRange
+                    )
+                    AccountSelectorChip(
+                        accounts = state.allAccounts,
+                        selectedAccountId = filter.selectedAccountId,
+                        onAccountSelected = viewModel::selectAccount
+                    )
                 }
             }
         },
@@ -223,36 +226,5 @@ fun TransactionsScreen(viewModel: TransactionsViewModel) {
             onApply = viewModel::applySimilarCategoryUpdate,
             onDismiss = viewModel::dismissSimilarPrompt
         )
-    }
-}
-
-@Composable
-private fun AccountFilterButton(accounts: List<Account>, selectedId: Long?, onSelected: (Long?) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    val label = accounts.firstOrNull { it.id == selectedId }?.name ?: "All accounts"
-
-    Box {
-        TextButton(onClick = { expanded = true }) {
-            Text(label, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            DropdownMenuItem(
-                text = { Text("All accounts") },
-                onClick = {
-                    onSelected(null)
-                    expanded = false
-                }
-            )
-            accounts.forEach { account ->
-                DropdownMenuItem(
-                    text = { Text(account.name) },
-                    onClick = {
-                        onSelected(account.id)
-                        expanded = false
-                    }
-                )
-            }
-        }
     }
 }

@@ -1,5 +1,10 @@
 package com.financetracker.app.ui.screens.overview
 
+import androidx.compose.material.icons.automirrored.filled.ShowChart
+import androidx.compose.foundation.layout.statusBarsPadding
+import com.financetracker.app.ui.components.periodTitle
+import com.financetracker.app.ui.components.HeaderButton
+import com.financetracker.app.ui.components.ScreenHeader
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.material.icons.filled.AccountBalanceWallet
@@ -63,7 +68,9 @@ import com.financetracker.app.util.TrendGranularity
 fun CategoryOverviewScreen(
     viewModel: CategoryOverviewViewModel,
     onOpenTransactions: (TransactionsDrillDown) -> Unit,
-    shopping: @Composable (Modifier) -> Unit = {}
+    shopping: @Composable (Modifier) -> Unit = {},
+    onOpenTrends: () -> Unit = {},
+    onOpenAskAi: () -> Unit = {}
 ) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val state by viewModel.uiState.collectAsState()
@@ -100,7 +107,35 @@ fun CategoryOverviewScreen(
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Spending Overview") }) }
+        // Same header as Home, with the shared account and period chips (see ViewFilter).
+        topBar = {
+            Column(modifier = Modifier.statusBarsPadding().padding(horizontal = 16.dp)) {
+                ScreenHeader(smallLine = "Spending", title = periodTitle(state.periodOption), onOpenAskAi = onOpenAskAi) {
+                    HeaderButton(Icons.AutoMirrored.Filled.ShowChart, "Trends", onOpenTrends)
+                }
+                Row(
+                    modifier = Modifier.padding(vertical = 10.dp).horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    PeriodSelectorChip(
+                        option = state.periodOption,
+                        customRange = state.customRange,
+                        onOptionSelected = viewModel::selectPeriod,
+                        onCustomRangeSelected = viewModel::selectCustomRange
+                    )
+                    AccountSelectorChip(
+                        accounts = state.accounts,
+                        selectedAccountId = state.selectedAccountId,
+                        onAccountSelected = viewModel::selectAccount
+                    )
+                    CategoryFilterChip(
+                        categories = state.categories,
+                        selected = state.categoryFilter,
+                        onSelected = viewModel::selectCategoryFilter
+                    )
+                }
+            }
+        }
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
         TabRow(selectedTabIndex = tab, containerColor = Color.Transparent) {
@@ -119,25 +154,6 @@ fun CategoryOverviewScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    AccountSelectorChip(
-                        accounts = state.accounts,
-                        selectedAccountId = state.selectedAccountId,
-                        onAccountSelected = viewModel::selectAccount
-                    )
-                    CategoryFilterChip(
-                        categories = state.categories,
-                        selected = state.categoryFilter,
-                        onSelected = viewModel::selectCategoryFilter
-                    )
-                }
-            }
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {
@@ -170,15 +186,9 @@ fun CategoryOverviewScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        "Breakdown",
+                        "Breakdown · ${state.periodOption.label.lowercase()}",
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.weight(1f)
-                    )
-                    PeriodSelectorChip(
-                        option = state.periodOption,
-                        customRange = state.customRange,
-                        onOptionSelected = viewModel::selectPeriod,
-                        onCustomRangeSelected = viewModel::selectCustomRange
                     )
                 }
             }
