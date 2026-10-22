@@ -1,5 +1,6 @@
 package com.financetracker.app.ui.screens.dashboard
 
+import com.financetracker.app.ui.components.AutoSizeText
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -40,6 +41,9 @@ import com.financetracker.app.ui.theme.gradientBrush
 @Composable
 fun SummaryCard(
     summary: AiSummary?,
+    /** The account Home is showing (null = all accounts) and its name. */
+    viewingAccountId: Long?,
+    viewingAccountName: String,
     isMaking: Boolean,
     error: String?,
     onRefresh: () -> Unit,
@@ -57,11 +61,20 @@ fun SummaryCard(
                         style = MaterialTheme.typography.titleSmall.merge(TextStyle(brush = palette.gradientBrush())),
                         fontWeight = FontWeight.SemiBold
                     )
+                    if (summary != null && summary.accountName.isNotBlank()) {
+                        Text(
+                            summary.accountName,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                     Text(
-                        summary?.subtitle ?: "Every Sunday at 18:00",
+                        summary?.let { "AI summary · ${it.subtitle}" } ?: "Every Sunday at 18:00",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
@@ -88,6 +101,14 @@ fun SummaryCard(
                     modifier = Modifier.padding(end = 8.dp)
                 )
             } else {
+                if (summary.accountName.isNotBlank() && summary.accountId != viewingAccountId) {
+                    Text(
+                        "This summary is for ${summary.accountName}; Home is showing $viewingAccountName. Tap Refresh now for that one.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(end = 8.dp)) {
                     summary.stats.forEach { stat ->
                         Column(
@@ -98,7 +119,7 @@ fun SummaryCard(
                                 .padding(10.dp)
                         ) {
                             Text(stat.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(stat.value, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            AutoSizeText(stat.value, style = MaterialTheme.typography.titleSmall)
                             Text(
                                 stat.detail,
                                 style = MaterialTheme.typography.labelSmall,
@@ -107,8 +128,7 @@ fun SummaryCard(
                                     false -> palette.negative
                                     null -> MaterialTheme.colorScheme.onSurfaceVariant
                                 },
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                maxLines = 2
                             )
                         }
                     }

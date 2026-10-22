@@ -323,6 +323,8 @@ fun DashboardContent(
             item {
                 SummaryCard(
                     summary = summary,
+                    viewingAccountId = state.selectedAccountId,
+                    viewingAccountName = state.accounts.firstOrNull { it.id == state.selectedAccountId }?.name ?: "All accounts",
                     isMaking = isMakingSummary,
                     error = summaryError,
                     onRefresh = onRefreshSummary,

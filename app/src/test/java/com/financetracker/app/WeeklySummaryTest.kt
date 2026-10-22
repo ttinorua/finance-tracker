@@ -29,8 +29,23 @@ class WeeklySummaryTest {
         val summary = AiSummary(
             title = "Spending above usual", subtitle = "AI summary · 13 Oct – 19 Oct · Main", createdAt = 5, automatic = true,
             stats = listOf(SummaryStat("Spent", "1,200 kr", "↑ 12% vs usual", false), SummaryStat("Income", "0 kr", "your week")),
-            points = listOf("Fuel up."), tip = null
+            points = listOf("Fuel up."), tip = null, accountId = 3, accountName = "Sydbank Privatkonto"
         )
         assertEquals(summary, WeeklySummary.decode(WeeklySummary.encode(summary)))
+    }
+
+    @Test
+    fun `summaries saved before the account was stored don't claim all accounts`() {
+        val old = """{"title":"T","subtitle":"AI summary · 1–7 Oct · Sydbank","created":1,"auto":false,"stats":[],"points":[],"tip":null}"""
+        assertEquals("", WeeklySummary.decode(old).accountName)
+    }
+
+    @Test
+    fun `date ranges are short`() {
+        fun utc(y: Int, m: Int, d: Int) = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply { clear(); set(y, m - 1, d) }.timeInMillis
+        val year = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
+        assertEquals("1–22 Oct", WeeklySummary.shortRange(utc(year, 10, 1), utc(year, 10, 22)))
+        assertEquals("28 Sep – 4 Oct", WeeklySummary.shortRange(utc(year, 9, 28), utc(year, 10, 4)))
+        assertEquals("28 Dec 2024 – 3 Jan 2025", WeeklySummary.shortRange(utc(2024, 12, 28), utc(2025, 1, 3)))
     }
 }

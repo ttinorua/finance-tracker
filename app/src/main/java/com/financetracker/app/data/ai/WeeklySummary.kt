@@ -47,18 +47,21 @@ data class SummaryStat(val label: String, val value: String, val detail: String,
 /** The AI summary card on Home: the app's own figures plus a few lines the AI wrote about them. */
 data class AiSummary(
     val title: String,
-    /** "AI summary · 13–19 Oct · Main account". */
+    /** "13–19 Oct". */
     val subtitle: String,
     val createdAt: Long,
     /** Made by the Sunday schedule rather than Refresh now. */
     val automatic: Boolean,
     val stats: List<SummaryStat>,
     val points: List<String>,
-    val tip: String?
+    val tip: String?,
+    /** The account it's about (null = all accounts) and its name, shown on the card. */
+    val accountId: Long? = null,
+    val accountName: String = "All accounts"
 ) {
     /** What "Ask about this" sends to the advisor. */
     fun followUpPrompt(): String = buildString {
-        append("About my AI summary (").append(subtitle).append("): ").append(title).append(". ")
+        append("About my AI summary").append(if (accountName.isNotBlank()) " for $accountName" else "").append(", ").append(subtitle).append(": ").append(title).append(". ")
         points.forEach { append(it).append(' ') }
         append("Tell me more, and what I should do next.")
     }
@@ -126,7 +129,9 @@ object WeeklySummary {
     ): AiSummary {
         val now = System.currentTimeMillis()
         val currency = CurrencySettings.currencyCode.value
-        val money = { value: Double -> Formatters.currency(value, currency) }
+        // Whole amounts, and no "kr." dot running into the end of a sentence.
+        val symbol = Formatters.currencySymbol(currency).trimEnd('.')
+        val money = { value: Double -> "${Formatters.whole(value)} $symbol" }
         val counted = FinanceAnalysis.counted(
             repository.observeTransactions().first(), accountId,
             BudgetSettings.excludeTransfersFromSpending.value, BudgetSettings.shiftSalaryToNextMonth.value,
@@ -134,17 +139,17 @@ object WeeklySummary {
         )
         val facts = SummaryFactsCalculator.compute(counted, from, minOf(to, now + DAY), now, overallBudget(accountId))
         val accountName = accountId?.let { id -> repository.getAccounts().firstOrNull { it.id == id }?.name } ?: "All accounts"
-        val subtitle = "AI summary · ${Formatters.date(from)} – ${Formatters.date(minOf(to, now) - 1)} · $accountName"
+        val subtitle = shortRange(from, minOf(to, now) - 1)
 
         val stats = buildList {
             add(
                 SummaryStat(
                     "Spent", money(facts.spent),
-                    facts.changePercent?.let { "${if (it <= 0) "↓" else "↑"} ${abs(it).roundToInt()}% vs usual" } ?: "no comparison yet",
+                    facts.changePercent?.let { "${if (it <= 0) "↓" else "↑"}${abs(it).roundToInt()}% vs usual" } ?: "no comparison yet",
                     facts.changePercent?.let { it <= 0 }
                 )
             )
-            facts.budgetLeft?.let { add(SummaryStat("Budget left", money(it), "${facts.daysLeftInMonth} days to go", it >= 0)) }
+            facts.budgetLeft?.let { add(SummaryStat("Budget left", money(it), "${facts.daysLeftInMonth} days left", it >= 0)) }
                 ?: facts.topCategories.firstOrNull()?.let { (name, amount) -> add(SummaryStat("Biggest", money(amount), name)) }
             add(SummaryStat("Income", money(facts.income), periodLabel.lowercase()))
         }
@@ -158,10 +163,26 @@ object WeeklySummary {
             automatic = automatic,
             stats = stats,
             points = written?.second?.takeIf { it.isNotEmpty() } ?: plainPoints(facts, money),
-            tip = written?.third
+            tip = written?.third,
+            accountId = accountId,
+            accountName = accountName
         )
         store(summary)
         return summary
+    }
+
+    /** "1–22 Oct", "28 Sep – 4 Oct" or "1 Jan 2025 – 3 Feb 2026". */
+    internal fun shortRange(from: Long, toInclusive: Long): String {
+        val utc = java.util.TimeZone.getTimeZone("UTC")
+        fun fmt(p: String, t: Long) = java.text.SimpleDateFormat(p, java.util.Locale.US).apply { timeZone = utc }.format(t)
+        val sameYear = fmt("yyyy", from) == fmt("yyyy", toInclusive)
+        val thisYear = fmt("yyyy", toInclusive) == fmt("yyyy", System.currentTimeMillis())
+        return when {
+            sameYear && fmt("MM", from) == fmt("MM", toInclusive) ->
+                (if (fmt("d", from) == fmt("d", toInclusive)) "" else fmt("d", from) + "–") + fmt("d MMM", toInclusive) + if (thisYear) "" else fmt(" yyyy", toInclusive)
+            sameYear -> fmt("d MMM", from) + " – " + fmt("d MMM", toInclusive) + if (thisYear) "" else fmt(" yyyy", toInclusive)
+            else -> fmt("d MMM yyyy", from) + " – " + fmt("d MMM yyyy", toInclusive)
+        }
     }
 
     private fun overallBudget(accountId: Long?): Double? {
@@ -210,9 +231,9 @@ object WeeklySummary {
     }
 
     private fun plainPoints(facts: SummaryFacts, money: (Double) -> String): List<String> = buildList {
-        facts.topCategories.take(2).forEach { (name, amount) -> add("$name: ${money(amount)}.") }
+        facts.topCategories.take(2).forEach { (name, amount) -> add("$name: ${money(amount)}") }
         facts.changes.firstOrNull()?.let { add("${it.name} was ${money(abs(it.difference))} ${if (it.difference > 0) "more" else "less"} than usual.") }
-        facts.budgetLeft?.let { add("${money(it)} of your monthly budget left.") }
+        facts.budgetLeft?.let { add(if (it >= 0) "${money(it)} of your monthly budget left" else "Monthly budget is ${money(-it)} over") }
     }
 
     private fun store(summary: AiSummary?) {
@@ -260,6 +281,7 @@ object WeeklySummary {
             s.stats.forEach { put(JSONObject().put("label", it.label).put("value", it.value).put("detail", it.detail).put("good", it.good ?: JSONObject.NULL)) }
         })
         .put("points", JSONArray(s.points)).put("tip", s.tip ?: JSONObject.NULL)
+        .put("accountId", s.accountId ?: JSONObject.NULL).put("accountName", s.accountName)
         .toString()
 
     internal fun decode(raw: String): AiSummary {
@@ -276,7 +298,10 @@ object WeeklySummary {
                 SummaryStat(s.getString("label"), s.getString("value"), s.optString("detail"), if (s.isNull("good")) null else s.getBoolean("good"))
             },
             points = (0 until points.length()).map { points.getString(it) },
-            tip = if (o.isNull("tip")) null else o.optString("tip")
+            tip = if (o.isNull("tip")) null else o.optString("tip"),
+            accountId = if (o.isNull("accountId")) null else o.optLong("accountId"),
+            // Summaries saved before the account was stored keep it in their subtitle instead.
+            accountName = o.optString("accountName", "")
         )
     }
 }
