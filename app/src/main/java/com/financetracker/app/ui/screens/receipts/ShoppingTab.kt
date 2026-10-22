@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -58,7 +59,6 @@ import com.financetracker.app.ui.components.CategoryIconTile
 import com.financetracker.app.ui.components.EmptyState
 import com.financetracker.app.ui.components.GlassCard
 import com.financetracker.app.ui.components.IconTile
-import com.financetracker.app.ui.components.PeriodSelectorChip
 import com.financetracker.app.ui.components.StoreLogo
 import com.financetracker.app.ui.theme.ExpenseRed
 import com.financetracker.app.util.Formatters
@@ -68,6 +68,7 @@ import com.financetracker.app.util.periodRange
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import com.financetracker.app.data.prefs.ViewFilter
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -90,7 +91,8 @@ data class ShoppingState(
 /** Uses the app-wide [periodRange] (UTC calendar days, like every other screen) so the period
  * label and the receipts it covers always agree. */
 class ShoppingViewModel(repository: FinanceRepository) : ViewModel() {
-    private val period = MutableStateFlow<Pair<PeriodOption, Pair<Long, Long>?>>(PeriodOption.THIS_MONTH to null)
+    /** Follows the period picked in the Spending header (shared with every tab). */
+    private val period = combine(ViewFilter.period, ViewFilter.customRange) { option, custom -> option to custom }
     private val view = MutableStateFlow(ShoppingView.STORE)
 
     val state: StateFlow<ShoppingState> = combine(
@@ -120,8 +122,6 @@ class ShoppingViewModel(repository: FinanceRepository) : ViewModel() {
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ShoppingState())
 
-    fun selectPeriod(option: PeriodOption) { period.value = option to null }
-    fun selectCustomRange(start: Long, endExclusive: Long) { period.value = PeriodOption.CUSTOM to (start to endExclusive) }
     fun selectView(v: ShoppingView) { view.value = v }
 }
 
@@ -151,13 +151,8 @@ fun ShoppingTab(viewModel: ShoppingViewModel, onOpenReceipt: (Long) -> Unit, mod
     ) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                PeriodSelectorChip(
-                    option = state.periodOption,
-                    customRange = state.customRange,
-                    onOptionSelected = viewModel::selectPeriod,
-                    onCustomRangeSelected = viewModel::selectCustomRange,
-                    modifier = Modifier.weight(1f)
-                )
+                // The period comes from the header's period chip; only the store and add buttons live here.
+                Spacer(Modifier.weight(1f))
                 IconButton(onClick = onOpenStores) { Icon(Icons.Filled.Storefront, contentDescription = "Store connections") }
                 Box {
                     FilledIconButton(onClick = { addMenu = true }) { Icon(Icons.Filled.Add, contentDescription = "Add receipt") }
