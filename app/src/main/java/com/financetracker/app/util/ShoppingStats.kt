@@ -18,35 +18,10 @@ object ShoppingStats {
 
     fun inRange(t: Long, range: Pair<Long, Long>) = t >= range.first && t < range.second
 
-    /** The receipts and receipt lines that match Spending's header filters. */
-    data class Filtered(val receipts: List<Receipt>, val items: List<ReceiptItemDetails>, val byCategory: Boolean)
-
-    /**
-     * [accountId] (null = all accounts) keeps receipts whose matched payment is on that account;
-     * a receipt not matched to a payment only shows under All accounts. [category] keeps the
-     * receipt lines in that category, and the receipts that have at least one of them.
-     */
-    fun filter(
-        receipts: List<Receipt>,
-        items: List<ReceiptItemDetails>,
-        accountOfPayment: Map<Long, Long>,
-        accountId: Long?,
-        category: CategoryFilter
-    ): Filtered {
-        val onAccount = if (accountId == null) receipts else receipts.filter { r -> r.transactionId?.let { accountOfPayment[it] } == accountId }
-        val receiptIds = onAccount.mapTo(HashSet()) { it.id }
-        val lines = items.filter { it.receiptId in receiptIds && category.matches(it) }
-        if (category == CategoryFilter.All) return Filtered(onAccount, lines, byCategory = false)
-        val withLines = lines.mapTo(HashSet()) { it.receiptId }
-        return Filtered(onAccount.filter { it.id in withLines }, lines, byCategory = true)
-    }
-
-    /** Shops by what was bought there (used when only some lines of each receipt count). */
-    fun byStoreFromItems(items: List<ReceiptItemDetails>, range: Pair<Long, Long>): List<Line> =
-        items.filter { inRange(it.purchasedAt, range) }
-            .groupBy { it.storeName.trim().lowercase() }
-            .map { (key, list) -> Line(key, list.first().storeName.trim(), list.sumOf { it.amount }, list.distinctBy { it.receiptId }.size) }
-            .sortedByDescending { it.total }
+    /** Receipts paid from [accountId] (null = all accounts), going by the payment each receipt
+     * matched. A receipt not matched to a payment only shows under All accounts. */
+    fun onAccount(receipts: List<Receipt>, accountOfPayment: Map<Long, Long>, accountId: Long?): List<Receipt> =
+        if (accountId == null) receipts else receipts.filter { r -> r.transactionId?.let { accountOfPayment[it] } == accountId }
 
     fun byStore(receipts: List<Receipt>, range: Pair<Long, Long>): List<Line> =
         receipts.filter { inRange(it.purchasedAt, range) }

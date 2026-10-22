@@ -68,8 +68,7 @@ import com.financetracker.app.util.TrendGranularity
 fun CategoryOverviewScreen(
     viewModel: CategoryOverviewViewModel,
     onOpenTransactions: (TransactionsDrillDown) -> Unit,
-    /** The Shopping tab, given the header's category filter (period and account it reads itself). */
-    shopping: @Composable (Modifier, CategoryFilter) -> Unit = { _, _ -> },
+    shopping: @Composable (Modifier) -> Unit = {},
     onOpenTrends: () -> Unit = {},
     onOpenAskAi: () -> Unit = {}
 ) {
@@ -129,11 +128,14 @@ fun CategoryOverviewScreen(
                         selectedAccountId = state.selectedAccountId,
                         onAccountSelected = viewModel::selectAccount
                     )
-                    CategoryFilterChip(
-                        categories = state.categories,
-                        selected = state.categoryFilter,
-                        onSelected = viewModel::selectCategoryFilter
-                    )
+                    // The category filter is only for the Categories tab (Shopping is groceries).
+                    if (tab == 0) {
+                        CategoryFilterChip(
+                            categories = state.categories,
+                            selected = state.categoryFilter,
+                            onSelected = viewModel::selectCategoryFilter
+                        )
+                    }
                 }
             }
         }
@@ -145,7 +147,7 @@ fun CategoryOverviewScreen(
             }
         }
         if (tab == 1) {
-            shopping(Modifier.weight(1f), state.categoryFilter)
+            shopping(Modifier.weight(1f))
             return@Column
         }
         LazyColumn(

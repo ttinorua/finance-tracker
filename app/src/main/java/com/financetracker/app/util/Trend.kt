@@ -30,13 +30,6 @@ sealed class CategoryFilter {
         is Single -> tx.categoryId == categoryId
     }
 
-    fun matches(item: com.financetracker.app.data.db.entity.ReceiptItemDetails): Boolean = when (this) {
-        All -> true
-        Uncategorized -> item.categoryId == null
-        is Main -> item.mainCategoryName == name
-        is Single -> item.categoryId == categoryId
-    }
-
     /** A navigation-safe form, read back by [decode]. */
     fun encode(): String = when (this) {
         All -> "all"

@@ -273,14 +273,13 @@ class MainActivity : ComponentActivity() {
                                 onOpenTransactions = { drillDown -> navController.navigate(drillDown.drillRoute()) },
                                 onOpenTrends = { navController.navigate("trends") },
                                 onOpenAskAi = { navController.navigate("ask_ai") },
-                                shopping = { modifier, categoryFilter ->
+                                shopping = { modifier ->
                                     val shoppingVm: ShoppingViewModel = viewModel(factory = ViewModelFactory { ShoppingViewModel(repository) })
                                     ShoppingTab(
                                         shoppingVm,
                                         onOpenReceipt = { navController.navigate("receipt/$it") },
                                         modifier = modifier,
-                                        onOpenStores = { navController.navigate("store_connections") },
-                                        categoryFilter = categoryFilter
+                                        onOpenStores = { navController.navigate("store_connections") }
                                     )
                                 }
                             )

@@ -36,7 +36,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -72,7 +71,6 @@ import kotlinx.coroutines.flow.StateFlow
 import com.financetracker.app.data.prefs.ViewFilter
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
-import com.financetracker.app.util.CategoryFilter
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -98,33 +96,30 @@ class ShoppingViewModel(repository: FinanceRepository) : ViewModel() {
     private val period = combine(ViewFilter.period, ViewFilter.customRange) { option, custom -> option to custom }
     private val view = MutableStateFlow(ShoppingView.STORE)
 
-    private val categoryFilter = MutableStateFlow<CategoryFilter>(CategoryFilter.All)
     private val accountOfPayment = repository.observeTransactions().map { list -> list.associate { it.id to it.accountId } }
-    /** Account and category picked in the Spending header. */
-    private val headerFilters = combine(ViewFilter.accountId, categoryFilter) { account, category -> account to category }
     private val data = combine(repository.observeReceipts(), repository.observeReceiptItemDetails(), accountOfPayment) { r, i, a -> Triple(r, i, a) }
 
     val state: StateFlow<ShoppingState> = combine(
         data,
-        headerFilters,
+        ViewFilter.accountId,
         period,
         view
-    ) { (allReceipts, allItems, accounts), (accountId, category), (option, custom), view ->
+    ) { (allReceipts, allItems, accounts), accountId, (option, custom), view ->
         val range = periodRange(option, custom)
-        val filtered = ShoppingStats.filter(allReceipts, allItems, accounts, accountId, category)
-        val receipts = filtered.receipts
-        val items = filtered.items
+        // Follows the account picked in the Spending header (period too, see [period]).
+        val receipts = ShoppingStats.onAccount(allReceipts, accounts, accountId)
+        val receiptIds = receipts.mapTo(HashSet()) { it.id }
+        val items = allItems.filter { it.receiptId in receiptIds }
         val inMonth = receipts.filter { ShoppingStats.inRange(it.purchasedAt, range) }
         val byCategory = ShoppingStats.byCategory(items, range)
         ShoppingState(
             periodOption = option,
             customRange = custom,
             view = view,
-            // With a category picked only those lines count, not the whole receipt.
-            total = if (filtered.byCategory) items.filter { ShoppingStats.inRange(it.purchasedAt, range) }.sumOf { it.amount } else inMonth.sumOf { it.total },
+            total = inMonth.sumOf { it.total },
             receiptCount = inMonth.size,
             lines = when (view) {
-                ShoppingView.STORE -> if (filtered.byCategory) ShoppingStats.byStoreFromItems(items, range) else ShoppingStats.byStore(receipts, range)
+                ShoppingView.STORE -> ShoppingStats.byStore(receipts, range)
                 ShoppingView.CATEGORY -> byCategory
                 ShoppingView.ITEM -> ShoppingStats.byItem(items, range).take(30)
             },
@@ -136,14 +131,12 @@ class ShoppingViewModel(repository: FinanceRepository) : ViewModel() {
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ShoppingState())
 
     fun selectView(v: ShoppingView) { view.value = v }
-    fun setCategoryFilter(filter: CategoryFilter) { categoryFilter.value = filter }
 }
 
 /** The Shopping tab of Spending: shopping in the chosen period from receipts — by store, by category or
  * by item — what got more expensive, and the receipts themselves. + adds a receipt. */
 @Composable
-fun ShoppingTab(viewModel: ShoppingViewModel, onOpenReceipt: (Long) -> Unit, modifier: Modifier = Modifier, onOpenStores: () -> Unit = {}, categoryFilter: CategoryFilter = CategoryFilter.All) {
-    LaunchedEffect(categoryFilter) { viewModel.setCategoryFilter(categoryFilter) }
+fun ShoppingTab(viewModel: ShoppingViewModel, onOpenReceipt: (Long) -> Unit, modifier: Modifier = Modifier, onOpenStores: () -> Unit = {}) {
     val state by viewModel.state.collectAsState()
     val currency by CurrencySettings.currencyCode.collectAsState()
     val context = LocalContext.current
