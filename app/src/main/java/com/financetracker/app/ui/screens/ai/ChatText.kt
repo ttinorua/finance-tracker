@@ -78,7 +78,14 @@ fun parseChatBlocks(text: String): List<ChatBlock> {
 
 private val INLINE = Regex("""\*\*(.+?)\*\*|__(.+?)__|(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])|`([^`]+)`""")
 
-private fun AnnotatedString.Builder.appendInline(text: String) {
+/** A Markdown link, e.g. the "([telenor.dk](https://…))" citations web search answers carry. */
+private val LINK = Regex("""\[([^\]\n]+)]\((https?://[^)\s]+)\)""")
+
+/** Markdown links shown as their label only: the pages are listed under the answer. */
+fun stripLinks(text: String): String = text.replace(LINK) { it.groupValues[1] }
+
+private fun AnnotatedString.Builder.appendInline(raw: String) {
+    val text = stripLinks(raw)
     var last = 0
     for (m in INLINE.findAll(text)) {
         append(text.substring(last, m.range.first).replace("**", ""))

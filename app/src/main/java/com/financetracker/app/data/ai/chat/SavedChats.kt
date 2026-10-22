@@ -1,6 +1,7 @@
 package com.financetracker.app.data.ai.chat
 
 import android.content.Context
+import com.financetracker.app.data.ai.WebSource
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,7 +25,11 @@ data class SavedMessage(
     val text: String,
     val isError: Boolean = false,
     val usedChatGptPlan: Boolean = false,
-    val cards: List<SavedCard> = emptyList()
+    val cards: List<SavedCard> = emptyList(),
+    val searchedWeb: Boolean = false,
+    val sources: List<WebSource> = emptyList(),
+    /** Only the file's name: the file itself is never kept. */
+    val attachmentName: String? = null
 )
 
 data class SavedChat(
@@ -113,6 +118,11 @@ object SavedChats {
                             put(
                                 JSONObject().put("user", m.isUser).put("text", m.text).put("error", m.isError)
                                     .put("plan", m.usedChatGptPlan)
+                                    .put("web", m.searchedWeb)
+                                    .put("sources", JSONArray().apply {
+                                        m.sources.forEach { put(JSONObject().put("title", it.title).put("url", it.url)) }
+                                    })
+                                    .put("file", m.attachmentName ?: JSONObject.NULL)
                                     .put("cards", JSONArray().apply {
                                         m.cards.forEach { c ->
                                             put(
@@ -144,11 +154,18 @@ object SavedChats {
                 messages = (0 until messages.length()).map { j ->
                     val m = messages.getJSONObject(j)
                     val cards = m.optJSONArray("cards") ?: JSONArray()
+                    val sources = m.optJSONArray("sources") ?: JSONArray()
                     SavedMessage(
                         isUser = m.optBoolean("user"),
                         text = m.optString("text"),
                         isError = m.optBoolean("error"),
                         usedChatGptPlan = m.optBoolean("plan"),
+                        searchedWeb = m.optBoolean("web"),
+                        sources = (0 until sources.length()).mapNotNull { k ->
+                            val src = sources.optJSONObject(k) ?: return@mapNotNull null
+                            WebSource(src.optString("title"), src.optString("url").ifBlank { return@mapNotNull null })
+                        },
+                        attachmentName = if (m.isNull("file")) null else m.optString("file").ifBlank { null },
                         cards = (0 until cards.length()).map { k ->
                             val c = cards.getJSONObject(k)
                             val lines = c.optJSONArray("lines") ?: JSONArray()

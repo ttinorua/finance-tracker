@@ -5,6 +5,7 @@ import com.financetracker.app.data.ai.AiJson
 import com.financetracker.app.data.ai.AiRequestException
 import com.financetracker.app.data.ai.ChatTurn
 import com.financetracker.app.data.ai.InsightCard
+import com.financetracker.app.data.ai.WebSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -69,6 +70,7 @@ internal object ChatGptService {
                 renewed = true
                 continue
             }
+            if (refusesWebSearch(failure) && dropWebSearch(body)) continue
             val field = failure.param?.substringBefore('.')?.substringBefore('[')
             if (failure.code == "subscription_sharing_unsupported_capability" && field != null &&
                 field in OPTIONAL_FIELDS && body.has(field) && dropped.add(field)
@@ -80,6 +82,40 @@ internal object ChatGptService {
             throw AiRequestException(failure.userMessage())
         }
     }
+
+    /** Whether the route turned down the web_search tool (not allowed for this plan or model). */
+    internal fun refusesWebSearch(failure: Outcome.Failure): Boolean {
+        if (failure.status == 401 || failure.status >= 500) return false
+        val text = (failure.message + " " + failure.code.orEmpty()).lowercase()
+        return failure.param?.startsWith("tools") == true || "web_search" in text || "web search" in text
+    }
+
+    /** Takes the web_search tool (and any searches already in the exchange) out of [body] and
+     * tells the AI it couldn't search. False if there was nothing to take out. */
+    internal fun dropWebSearch(body: JSONObject): Boolean {
+        val tools = body.optJSONArray("tools") ?: return false
+        val kept = JSONArray()
+        for (i in 0 until tools.length()) {
+            val tool = tools.optJSONObject(i)
+            if (tool?.optString("type") != "web_search") kept.put(tools.opt(i))
+        }
+        if (kept.length() == tools.length()) return false
+        body.put("tools", kept)
+        body.optJSONArray("input")?.let { input ->
+            val items = JSONArray()
+            for (i in 0 until input.length()) {
+                if (input.optJSONObject(i)?.optString("type") != "web_search_call") items.put(input.opt(i))
+            }
+            body.put("input", items)
+        }
+        body.put("instructions", body.optString("instructions") + "\n\n" + NO_WEB_SEARCH)
+        return true
+    }
+
+    private const val NO_WEB_SEARCH =
+        "Web search isn't available on the user's ChatGPT plan or model right now (ignore the web search notes above). " +
+            "If the question needs current information from the web, start your answer by saying you couldn't search " +
+            "online with their ChatGPT plan right now, then help with what the app's data shows."
 
     /** Settings this app can do without if the route turns them down. */
     private val OPTIONAL_FIELDS = setOf("reasoning", "include")
@@ -222,6 +258,32 @@ internal object ChatGptService {
         }
         return texts.joinToString("").trim()
     }
+
+    /** The web pages the answer cites (from web search), each once, in the order cited. */
+    internal fun sourcesOf(response: JSONObject): List<WebSource> {
+        val output = response.optJSONArray("output") ?: return emptyList()
+        val found = LinkedHashMap<String, WebSource>()
+        for (i in 0 until output.length()) {
+            val item = output.optJSONObject(i) ?: continue
+            if (item.optString("type") != "message") continue
+            val content = item.optJSONArray("content") ?: continue
+            for (j in 0 until content.length()) {
+                val annotations = content.optJSONObject(j)?.optJSONArray("annotations") ?: continue
+                for (k in 0 until annotations.length()) {
+                    val a = annotations.optJSONObject(k) ?: continue
+                    if (a.optString("type") != "url_citation") continue
+                    val url = cleanUrl(a.optString("url"))
+                    if (!url.startsWith("http")) continue
+                    found.putIfAbsent(url, WebSource(a.optString("title").trim(), url))
+                }
+            }
+        }
+        return found.values.toList()
+    }
+
+    /** Drops the "?utm_source=openai" OpenAI adds to cited links. */
+    internal fun cleanUrl(url: String): String = url.trim()
+        .replace(Regex("""([?&])utm_source=openai(&|$)""")) { m -> if (m.groupValues[2] == "&") m.groupValues[1] else "" }
 
     /** The model to use: the one picked in the AI advisor, else the one this account offers first. */
     private fun model(): String {

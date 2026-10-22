@@ -4,7 +4,9 @@ import com.financetracker.app.data.ai.AiNotConfiguredException
 import com.financetracker.app.data.ai.AiProvider
 import com.financetracker.app.data.ai.AiRequestException
 import com.financetracker.app.data.ai.AiSettings
+import com.financetracker.app.data.ai.ChatAttachment
 import com.financetracker.app.data.ai.ChatTurn
+import com.financetracker.app.data.ai.WebSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -17,8 +19,14 @@ data class ToolSpec(val name: String, val description: String, val parameters: J
 /** One function call the AI made. [id] links the result back to it (empty if the AI gave none). */
 data class ToolCall(val id: String, val name: String, val args: JSONObject)
 
-/** What one round trip to the AI produced: its text so far and the functions it wants run. */
-internal data class AgentStep(val text: String, val toolCalls: List<ToolCall>)
+/** What one round trip to the AI produced: its text so far and the functions it wants run, plus
+ * whether it searched the web and the pages it used (ChatGPT only). */
+internal data class AgentStep(
+    val text: String,
+    val toolCalls: List<ToolCall>,
+    val sources: List<WebSource> = emptyList(),
+    val searchedWeb: Boolean = false
+)
 
 /** A conversation with one AI that can go back and forth several times within one question:
  * the AI asks for functions, the app runs them and sends the results, until it answers. */
@@ -27,14 +35,21 @@ internal interface AgentSession {
     fun addToolResults(results: List<Pair<ToolCall, String>>)
 }
 
-data class AgentRun(val text: String, val provider: AiProvider)
+data class AgentRun(
+    val text: String,
+    val provider: AiProvider,
+    /** The web pages the answer is based on (empty when it didn't search). */
+    val sources: List<WebSource> = emptyList(),
+    val searchedWeb: Boolean = false
+)
 
 /**
  * Runs a question through an AI that can look things up and prepare changes using the app's own
  * functions ([ToolSpec]s), with the same fallback as [com.financetracker.app.data.ai.AiService]:
  * if the AI in use fails part-way, the whole question starts over with the next AI in the chain.
  * [onAttemptStart] runs before each attempt, so the caller can drop anything a failed attempt
- * prepared.
+ * prepared. An [attachment] (a photo or PDF) goes with [userMessage]; an AI that can't read
+ * files is skipped.
  */
 object AiAgent {
 
@@ -45,6 +60,7 @@ object AiAgent {
         history: List<ChatTurn>,
         userMessage: String,
         tools: List<ToolSpec>,
+        attachment: ChatAttachment? = null,
         onAttemptStart: () -> Unit,
         execute: suspend (ToolCall) -> String
     ): Result<AgentRun> {
@@ -57,13 +73,17 @@ object AiAgent {
             try {
                 val session = withContext(Dispatchers.IO) {
                     when (provider) {
-                        AiProvider.GEMINI -> GeminiAgentSession(key, systemPrompt, history, userMessage, tools)
-                        AiProvider.GROQ -> GroqAgentSession(key, systemPrompt, history, userMessage, tools)
-                        AiProvider.CHATGPT -> ChatGptAgentSession(systemPrompt, history, userMessage, tools)
-                        AiProvider.CLAUDE -> ClaudeAgentSession(systemPrompt, history, userMessage, tools)
+                        AiProvider.GEMINI -> GeminiAgentSession(key, systemPrompt, history, userMessage, tools, attachment)
+                        AiProvider.GROQ -> {
+                            if (attachment != null) throw AiRequestException("Groq can't read attached files.")
+                            GroqAgentSession(key, systemPrompt, history, userMessage, tools)
+                        }
+                        AiProvider.CHATGPT -> ChatGptAgentSession(systemPrompt, history, userMessage, tools, attachment)
+                        AiProvider.CLAUDE -> ClaudeAgentSession(systemPrompt, history, userMessage, tools, attachment)
                     }
                 }
-                return Result.success(AgentRun(loop(session, execute), provider))
+                val result = loop(session, execute)
+                return Result.success(AgentRun(result.text, provider, result.sources, result.searchedWeb))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -75,12 +95,19 @@ object AiAgent {
         return Result.failure(firstError ?: AiNotConfiguredException())
     }
 
-    private suspend fun loop(session: AgentSession, execute: suspend (ToolCall) -> String): String {
+    private class LoopResult(val text: String, val sources: List<WebSource>, val searchedWeb: Boolean)
+
+    private suspend fun loop(session: AgentSession, execute: suspend (ToolCall) -> String): LoopResult {
         val texts = mutableListOf<String>()
+        val sources = LinkedHashMap<String, WebSource>()
+        var searched = false
+        fun result(text: String) = LoopResult(text, sources.values.toList(), searched || sources.isNotEmpty())
         repeat(MAX_STEPS) {
             val step = withContext(Dispatchers.IO) { session.step() }
             step.text.takeIf { it.isNotBlank() }?.let(texts::add)
-            if (step.toolCalls.isEmpty()) return texts.joinToString("\n\n").trim()
+            step.sources.forEach { sources.putIfAbsent(it.url, it) }
+            searched = searched || step.searchedWeb
+            if (step.toolCalls.isEmpty()) return result(texts.joinToString("\n\n").trim())
             val results = step.toolCalls.map { call ->
                 call to try {
                     execute(call)
@@ -93,9 +120,11 @@ object AiAgent {
             withContext(Dispatchers.IO) { session.addToolResults(results) }
         }
         // Still asking for more after MAX_STEPS: answer with what there is.
-        return texts.joinToString("\n\n").trim().ifBlank {
-            "That took more steps than I'm allowed for one question. Try asking for a smaller part of it."
-        }
+        return result(
+            texts.joinToString("\n\n").trim().ifBlank {
+                "That took more steps than I'm allowed for one question. Try asking for a smaller part of it."
+            }
+        )
     }
 }
 

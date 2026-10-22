@@ -1,6 +1,11 @@
 package com.financetracker.app.data.ai.agent
 
 import com.anthropic.core.JsonValue
+import com.anthropic.models.messages.Base64ImageSource
+import com.anthropic.models.messages.Base64PdfSource
+import com.anthropic.models.messages.DocumentBlockParam
+import com.anthropic.models.messages.ImageBlockParam
+import com.anthropic.models.messages.TextBlockParam
 import com.anthropic.models.messages.ContentBlockParam
 import com.anthropic.models.messages.MessageCreateParams
 import com.anthropic.models.messages.MessageParam
@@ -10,6 +15,7 @@ import com.anthropic.models.messages.Tool
 import com.anthropic.models.messages.ToolResultBlockParam
 import com.financetracker.app.data.ai.AiNotConfiguredException
 import com.financetracker.app.data.ai.AiRequestException
+import com.financetracker.app.data.ai.ChatAttachment
 import com.financetracker.app.data.ai.ChatTurn
 import com.financetracker.app.data.ai.ClaudeService
 import com.financetracker.app.data.ai.GeminiService
@@ -28,7 +34,8 @@ internal class GeminiAgentSession(
     system: String,
     history: List<ChatTurn>,
     userMessage: String,
-    tools: List<ToolSpec>
+    tools: List<ToolSpec>,
+    attachment: ChatAttachment? = null
 ) : AgentSession {
 
     private val body: JSONObject = GeminiService.request(
@@ -45,7 +52,19 @@ internal class GeminiAgentSession(
                 }
             )
         )
-    )
+    ).also { body ->
+        // The attached file goes in front of the question's text.
+        if (attachment != null) {
+            val contents = body.getJSONArray("contents")
+            val question = contents.getJSONObject(contents.length() - 1)
+            val parts = JSONArray().put(
+                JSONObject().put("inlineData", JSONObject().put("mimeType", attachment.mimeType).put("data", attachment.base64))
+            )
+            val old = question.getJSONArray("parts")
+            for (i in 0 until old.length()) parts.put(old.get(i))
+            question.put("parts", parts)
+        }
+    }
 
     override fun step(): AgentStep {
         val response = GeminiService.send(key, body)
@@ -136,7 +155,8 @@ internal class ClaudeAgentSession(
     system: String,
     history: List<ChatTurn>,
     userMessage: String,
-    tools: List<ToolSpec>
+    tools: List<ToolSpec>,
+    attachment: ChatAttachment? = null
 ) : AgentSession {
 
     private val client = ClaudeService.client() ?: throw AiNotConfiguredException()
@@ -146,7 +166,22 @@ internal class ClaudeAgentSession(
         .apply {
             tools.forEach { addTool(toClaudeTool(it)) }
             history.forEach { turn -> if (turn.isUser) addUserMessage(turn.text) else addAssistantMessage(turn.text) }
-            addUserMessage(userMessage)
+            if (attachment == null) {
+                addUserMessage(userMessage)
+            } else {
+                val file = if (attachment.isPdf) {
+                    ContentBlockParam.ofDocument(
+                        DocumentBlockParam.builder().source(Base64PdfSource.builder().data(attachment.base64).build()).build()
+                    )
+                } else {
+                    ContentBlockParam.ofImage(
+                        ImageBlockParam.builder()
+                            .source(Base64ImageSource.builder().data(attachment.base64).mediaType(Base64ImageSource.MediaType.IMAGE_JPEG).build())
+                            .build()
+                    )
+                }
+                addUserMessageOfBlockParams(listOf(file, ContentBlockParam.ofText(TextBlockParam.builder().text(userMessage).build())))
+            }
         }
 
     override fun step(): AgentStep {

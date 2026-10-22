@@ -31,6 +31,18 @@ object DocumentAi {
 
     private class Part(val mimeType: String, val base64: String)
 
+    /** Opens a photo or PDF the person picked, ready to send with a chat message (photos scaled
+     * down like for documents). Runs on the IO thread. */
+    suspend fun loadAttachment(context: Context, uri: Uri): ChatAttachment = withContext(Dispatchers.IO) {
+        val part = load(context, uri)
+        val name = runCatching {
+            context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getString(0) else null
+            }
+        }.getOrNull()?.takeIf { it.isNotBlank() } ?: if (part.mimeType == "application/pdf") "Document.pdf" else "Photo.jpg"
+        ChatAttachment(name, part.mimeType, part.base64)
+    }
+
     /** True when an AI that can read documents (Gemini or Claude) has a key. */
     val isAvailable: Boolean get() = readers().isNotEmpty()
 

@@ -3,6 +3,7 @@ package com.financetracker.app
 import com.financetracker.app.data.ai.WeeklySummary
 import com.financetracker.app.data.prefs.UserAlerts
 import com.financetracker.app.data.ai.chat.AssistantPrefs
+import com.financetracker.app.data.ai.chat.AssistantMemory
 import com.financetracker.app.data.ai.chat.SavedChats
 import com.financetracker.app.data.prefs.ViewFilter
 import com.financetracker.app.data.enablebanking.BankAutoSync
@@ -58,6 +59,7 @@ class FinanceApp : Application() {
         ViewFilter.init(this)
         SavedChats.init(this)
         AssistantPrefs.init(this)
+        AssistantMemory.init(this)
         UserAlerts.init(this)
         WeeklySummary.init(this)
         BankScheduledPayments.init(this)

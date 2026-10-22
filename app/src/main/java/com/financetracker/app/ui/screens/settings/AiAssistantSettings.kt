@@ -2,6 +2,12 @@ package com.financetracker.app.ui.screens.settings
 
 import androidx.compose.material3.Switch
 import com.financetracker.app.data.ai.chat.AssistantPrefs
+import com.financetracker.app.data.ai.chat.AssistantMemory
+import com.financetracker.app.data.ai.chat.Memory
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.IconButton
 import android.content.Intent
 import android.net.Uri
 import android.os.Handler
@@ -131,6 +137,7 @@ fun AiAssistantSettings(modifier: Modifier = Modifier) {
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         AssistantChoices(chatGptConnected = state.chatGptEmail != null)
+        AssistantMemorySection()
     }
 
     editing?.let { provider ->
@@ -361,4 +368,68 @@ private fun AssistantChoices(chatGptConnected: Boolean) {
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
+}
+
+/** What the advisor remembers across chats: see, change, delete or add items. */
+@Composable
+private fun AssistantMemorySection() {
+    val memories by AssistantMemory.memories.collectAsState()
+    // The memory being edited; id 0 = a new one.
+    var editing by remember { mutableStateOf<Memory?>(null) }
+
+    Text("What the assistant remembers", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 16.dp))
+    Text(
+        if (memories.isEmpty()) {
+            "Nothing yet. In the chat, say e.g. \"Remember we have 3 phones and fiber internet on Telenor\". " +
+                "Ask \"What do you remember?\" to see the list there too."
+        } else {
+            "Used in every chat. Kept on this phone only and sent to the AI with your questions."
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)
+    )
+    memories.forEachIndexed { index, memory ->
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text("${index + 1}. ${memory.text}", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            IconButton(onClick = { editing = memory }) {
+                Icon(Icons.Filled.Edit, contentDescription = "Change: ${memory.text}")
+            }
+            IconButton(onClick = { AssistantMemory.remove(listOf(memory.id)) }) {
+                Icon(Icons.Filled.Delete, contentDescription = "Forget: ${memory.text}")
+            }
+        }
+    }
+    if (memories.size < AssistantMemory.MAX_ITEMS) {
+        TextButton(onClick = { editing = Memory(0, "", 0) }) {
+            Icon(Icons.Filled.Add, contentDescription = null)
+            Text("Add something to remember", modifier = Modifier.padding(start = 6.dp))
+        }
+    }
+
+    editing?.let { memory ->
+        var text by remember(memory.id) { mutableStateOf(memory.text) }
+        AlertDialog(
+            onDismissRequest = { editing = null },
+            title = { Text(if (memory.id == 0) "Remember" else "Change memory") },
+            text = {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it.take(AssistantMemory.MAX_LENGTH) },
+                    placeholder = { Text("e.g. Rent is due on the 1st") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = text.isNotBlank(),
+                    onClick = {
+                        if (memory.id == 0) AssistantMemory.add(text) else AssistantMemory.edit(memory.id, text)
+                        editing = null
+                    }
+                ) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { editing = null }) { Text("Cancel") } }
+        )
+    }
 }

@@ -10,6 +10,12 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Language
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import com.financetracker.app.data.ai.WebSource
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.border
 import androidx.activity.compose.BackHandler
@@ -111,6 +117,11 @@ fun AskAiScreen(viewModel: AskAiViewModel, onBack: () -> Unit) {
     var showModels by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val speaker = rememberSpeaker()
+    val context = LocalContext.current
+    // A bill or other document for the next message: a photo or a PDF.
+    val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) viewModel.attach(context, uri)
+    }
 
     BackHandler(enabled = showChats || showVoice) {
         if (showVoice) speaker.stop()
@@ -183,15 +194,27 @@ fun AskAiScreen(viewModel: AskAiViewModel, onBack: () -> Unit) {
         bottomBar = {
             if (state.isConfigured && !showChats && !showVoice) {
                 val palette = LocalAppPalette.current
-                val canSend = !state.isSending && input.isNotBlank()
+                val attachment = state.attachment
+                val fileOpening = attachment != null && attachment.file == null && attachment.error == null
+                val canSend = !state.isSending && !fileOpening && (input.isNotBlank() || attachment?.file != null)
                 Column(modifier = Modifier.background(palette.navBar.compositeOver(palette.base)).navigationBarsPadding().imePadding()) {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    if (attachment != null) {
+                        AttachmentChip(attachment, onRemove = viewModel::removeAttachment)
+                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.Bottom
                     ) {
+                        IconButton(
+                            onClick = { pickFile.launch(arrayOf("image/*", "application/pdf")) },
+                            enabled = !state.isSending,
+                            modifier = Modifier.padding(bottom = 4.dp)
+                        ) {
+                            Icon(Icons.Filled.AttachFile, contentDescription = "Attach a photo or PDF")
+                        }
                         // Grows to four lines, then scrolls inside, so the conversation stays visible.
                         OutlinedTextField(
                             value = input,
@@ -373,6 +396,22 @@ private fun ChatBubble(
             modifier = Modifier.fillMaxWidth(if (message.isUser) 0.85f else 0.95f),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            if (message.searchedWeb) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 4.dp)) {
+                    Icon(
+                        Icons.Filled.Language, contentDescription = null, modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        "Searched the web" + if (message.sources.isNotEmpty()) {
+                            " · ${message.sources.size} ${if (message.sources.size == 1) "site" else "sites"}"
+                        } else "",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 6.dp)
+                    )
+                }
+            }
             Card(
                 colors = CardDefaults.cardColors(
                     containerColor = when {
@@ -385,9 +424,23 @@ private fun ChatBubble(
                 border = if (message.isUser || message.isError) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
             ) {
                 if (message.isUser) {
-                    Text(message.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(12.dp))
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        message.attachmentName?.let { name ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Filled.AttachFile, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Text(
+                                    name, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(start = 4.dp)
+                                )
+                            }
+                        }
+                        Text(message.text, style = MaterialTheme.typography.bodyMedium)
+                    }
                 } else {
-                    ChatReply(message.text, Modifier.padding(12.dp))
+                    Column(Modifier.padding(12.dp)) {
+                        ChatReply(message.text)
+                        if (message.sources.isNotEmpty()) SourceList(message.sources)
+                    }
                 }
             }
             message.cards.forEach { card ->
@@ -482,6 +535,80 @@ private fun TransactionLine(tx: TransactionWithDetails) {
             color = if (tx.type == TransactionType.INCOME) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.padding(start = 8.dp)
         )
+    }
+}
+
+/** The photo or PDF waiting to go with the next message, above the text field. */
+@Composable
+private fun AttachmentChip(attachment: PendingAttachment, onRemove: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 6.dp)
+    ) {
+        when {
+            attachment.error != null -> Text(
+                attachment.error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.weight(1f)
+            )
+            attachment.file == null -> {
+                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                Text("Opening the file…", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f).padding(start = 8.dp))
+            }
+            else -> {
+                Icon(Icons.Filled.AttachFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text(
+                    attachment.file.name, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(start = 6.dp)
+                )
+            }
+        }
+        IconButton(onClick = onRemove) {
+            Icon(Icons.Filled.Close, contentDescription = "Remove the attached file")
+        }
+    }
+}
+
+/** The web pages an answer used, numbered; tapping one opens it in the browser. */
+@Composable
+private fun SourceList(sources: List<WebSource>) {
+    val context = LocalContext.current
+    var showAll by remember { mutableStateOf(false) }
+    Column(modifier = Modifier.padding(top = 10.dp)) {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Text(
+            "Sources", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)
+        )
+        val visible = if (showAll) sources else sources.take(5)
+        visible.forEachIndexed { index, source ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(role = Role.Button) {
+                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(source.url))) }
+                    }
+                    .padding(vertical = 8.dp)
+            ) {
+                Text(
+                    "${index + 1}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp).clip(RoundedCornerShape(6.dp))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = .14f)).padding(top = 3.dp),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+                Text(
+                    source.site + if (source.title.isNotBlank() && source.title != source.site) " · ${source.title}" else "",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 8.dp)
+                )
+            }
+        }
+        if (sources.size > 5) {
+            TextButton(onClick = { showAll = !showAll }, contentPadding = PaddingValues(horizontal = 0.dp)) {
+                Text(if (showAll) "Show less" else "Show all ${sources.size}", style = MaterialTheme.typography.labelSmall)
+            }
+        }
     }
 }
 
