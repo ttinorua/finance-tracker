@@ -58,4 +58,16 @@ class SummaryFactsTest {
         assertEquals(2500.0, facts.budgetLeft!!, 0.01)
         assertEquals(12, facts.daysLeftInMonth)
     }
+
+    @Test
+    fun `a salary moved into this month by the salary shift still counts`() {
+        val from = utc(2026, 10, 1)
+        val to = utc(2026, 11, 1)
+        val now = utc(2026, 10, 22)
+        // Paid 30 Sep, shown on 30 Oct by "Shift salary to next month": after today, inside the month.
+        val salary = tx(utc(2026, 10, 30), 29_835.0, "Pay, benefits and pension", TransactionType.INCOME)
+        val facts = SummaryFactsCalculator.compute(listOf(salary, tx(utc(2026, 10, 5), 500.0, "Food")), from, to, now, null)
+        assertEquals(29_835.0, facts.income, 0.01)
+        assertEquals(500.0, facts.spent, 0.01)
+    }
 }

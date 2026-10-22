@@ -137,7 +137,7 @@ object WeeklySummary {
             BudgetSettings.excludeTransfersFromSpending.value, BudgetSettings.shiftSalaryToNextMonth.value,
             MainAccountSettings.mainAccountId.value
         )
-        val facts = SummaryFactsCalculator.compute(counted, from, minOf(to, now + DAY), now, overallBudget(accountId))
+        val facts = SummaryFactsCalculator.compute(counted, from, to, now, overallBudget(accountId))
         val accountName = accountId?.let { id -> repository.getAccounts().firstOrNull { it.id == id }?.name } ?: "All accounts"
         val subtitle = shortRange(from, minOf(to, now) - 1)
 

@@ -26,7 +26,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.financetracker.app.data.ai.AiSummary
 import com.financetracker.app.ui.components.GlassCard
@@ -55,29 +54,12 @@ fun SummaryCard(
         Column(modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Filled.AutoAwesome, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))
-                Column(modifier = Modifier.padding(start = 8.dp).weight(1f)) {
-                    Text(
-                        summary?.title ?: "AI summary",
-                        style = MaterialTheme.typography.titleSmall.merge(TextStyle(brush = palette.gradientBrush())),
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    if (summary != null && summary.accountName.isNotBlank()) {
-                        Text(
-                            summary.accountName,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    Text(
-                        summary?.let { "AI summary · ${it.subtitle}" } ?: "Every Sunday at 18:00",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
+                Text(
+                    summary?.title ?: "AI summary",
+                    style = MaterialTheme.typography.titleSmall.merge(TextStyle(brush = palette.gradientBrush())),
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(start = 8.dp).weight(1f)
+                )
                 if (isMaking) {
                     CircularProgressIndicator(modifier = Modifier.padding(12.dp).size(18.dp), strokeWidth = 2.dp)
                 } else {
@@ -90,6 +72,18 @@ fun SummaryCard(
                         }
                     }
                 }
+            }
+
+            // Account and period get the card's full width so the dates are never cut off.
+            Column(modifier = Modifier.padding(end = 8.dp)) {
+                if (summary != null && summary.accountName.isNotBlank()) {
+                    Text(summary.accountName, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                }
+                Text(
+                    summary?.let { "AI summary · ${it.subtitle}" } ?: "Every Sunday at 18:00",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
             if (summary == null) {

@@ -104,6 +104,28 @@ class ChatGptTest {
     }
 
     @Test
+    fun `an answer is kept when the final event has an empty output`() {
+        val call = ChatGptService.parseStream(sequenceOf(
+            """data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","call_id":"c1","name":"get_overview","arguments":"{}"}}""",
+            """data: {"type":"response.completed","response":{"output":[]}}"""
+        )) as ChatGptService.Outcome.Done
+        assertEquals("function_call", call.response.getJSONArray("output").getJSONObject(0).getString("type"))
+
+        val streamedText = ChatGptService.parseStream(sequenceOf(
+            """data: {"type":"response.output_text.delta","delta":"Your week "}""",
+            """data: {"type":"response.output_text.delta","delta":"looks fine."}""",
+            """data: {"type":"response.completed","response":{"output":[]}}"""
+        )) as ChatGptService.Outcome.Done
+        assertEquals("Your week looks fine.", ChatGptService.textOf(streamedText.response))
+
+        val full = ChatGptService.parseStream(sequenceOf(
+            """data: {"type":"response.output_text.delta","delta":"ignored"}""",
+            """data: {"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"Hello"}]}]}}"""
+        )) as ChatGptService.Outcome.Done
+        assertEquals("Hello", ChatGptService.textOf(full.response))
+    }
+
+    @Test
     fun `errors before the stream are read in both shapes`() {
         val structured = ChatGptService.errorOutcome(400,
             """{"error":{"code":"subscription_sharing_unsupported_capability","param":"reasoning.effort","message":"no"}}""")

@@ -38,9 +38,13 @@ object SummaryFactsCalculator {
      * already limited to the account being summarized. [from]..[to) is the period.
      */
     fun compute(counted: List<TransactionWithDetails>, from: Long, to: Long, now: Long, overallBudget: Double?): SummaryFacts {
-        val length = (to - from).coerceAtLeast(DAY)
+        // Spending is compared up to today (a month still under way against equally long earlier
+        // stretches). Income counts the whole period: with "Shift salary to next month" on, a
+        // salary paid on 30 Sep counts on 30 Oct, a date that may still be ahead.
+        val spentUntil = minOf(to, now + DAY)
+        val length = (spentUntil - from).coerceAtLeast(DAY)
         val expenses = counted.filter { it.type == TransactionType.EXPENSE }
-        val inPeriod = expenses.filter { it.date in from until to }
+        val inPeriod = expenses.filter { it.date in from until spentUntil }
         val spent = inPeriod.sumOf { it.amount }
         val income = counted.filter { it.type == TransactionType.INCOME && it.date in from until to }.sumOf { it.amount }
 

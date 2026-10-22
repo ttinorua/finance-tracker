@@ -156,13 +156,34 @@ internal object ChatGptService {
     /** Reads the server-sent events until the response finishes. Only `response.completed` counts
      * as success: a usage limit can still stop the answer part-way. */
     internal fun parseStream(lines: Sequence<String>): Outcome {
+        // The finished items as they stream in. On this route (nothing stored at OpenAI) the final
+        // response.completed can carry an empty "output", so the answer is rebuilt from these.
+        val items = sortedMapOf<Int, JSONObject>()
+        val text = StringBuilder()
         for (line in lines) {
             if (!line.startsWith("data:")) continue
             val data = line.removePrefix("data:").trim()
             if (data.isEmpty() || data == "[DONE]") continue
             val event = runCatching { JSONObject(data) }.getOrNull() ?: continue
             when (event.optString("type")) {
-                "response.completed" -> return Outcome.Done(event.optJSONObject("response") ?: JSONObject())
+                "response.output_item.done" -> event.optJSONObject("item")?.let { items[event.optInt("output_index", items.size)] = it }
+                "response.output_text.delta" -> text.append(event.optString("delta"))
+                "response.completed" -> {
+                    val response = event.optJSONObject("response") ?: JSONObject()
+                    if ((response.optJSONArray("output")?.length() ?: 0) == 0) {
+                        val output = JSONArray()
+                        items.values.forEach { output.put(it) }
+                        if (items.values.none { it.optString("type") == "message" } && text.isNotBlank()) {
+                            output.put(
+                                JSONObject().put("type", "message").put("role", "assistant").put(
+                                    "content", JSONArray().put(JSONObject().put("type", "output_text").put("text", text.toString()))
+                                )
+                            )
+                        }
+                        response.put("output", output)
+                    }
+                    return Outcome.Done(response)
+                }
                 "response.failed" -> {
                     val error = event.optJSONObject("response")?.optJSONObject("error")
                     return Outcome.Failure(
