@@ -34,6 +34,7 @@ import com.financetracker.app.data.prefs.EnableBankingPrefs
 import com.financetracker.app.data.household.HouseholdSync
 import com.financetracker.app.data.prefs.CategoryIconChoices
 import com.financetracker.app.data.prefs.FixedExpenseCategories
+import com.financetracker.app.data.prefs.FixedMerchants
 import com.financetracker.app.data.prefs.LoansAndGoals
 import com.financetracker.app.data.prefs.MainAccountSettings
 import com.financetracker.app.data.prefs.ThemeSettings
@@ -68,6 +69,7 @@ class FinanceApp : Application() {
         BudgetLimits.init(this)
         AiInsightsCache.init(this)
         DismissedRecurringExpenses.init(this)
+        FixedMerchants.init(this)
         FixedExpenseCategories.init(this)
         CategoryIconChoices.init(this)
         EnableBankingPrefs.init(this)
@@ -94,6 +96,11 @@ class FinanceApp : Application() {
             BankCategories.ensure(repository, SupportedBanks.byId(EnableBankingPrefs.selectedBankId.value))
             CategoryCleanup.migrateLegacyDuplicates(repository)
             FixedExpenseCategories.seedLegacyDefaultsIfNeeded(repository.getCategories())
+        }
+        // Always keep a main account: pick one on first run, when accounts arrive from the bank,
+        // and after the main one is deleted.
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            repository.observeAccounts().collect { runCatching { MainAccountSettings.ensure(repository) } }
         }
 
         // Best-effort sync once per app launch; a no-op inside the worker if not connected.

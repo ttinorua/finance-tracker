@@ -83,6 +83,7 @@ import com.financetracker.app.data.advisor.AttentionMonitor
 import com.financetracker.app.data.ai.AiService
 import com.financetracker.app.data.db.entity.TransactionType
 import com.financetracker.app.data.prefs.CurrencySettings
+import com.financetracker.app.data.prefs.MainAccountSettings
 import com.financetracker.app.ui.components.AccountSelectorChip
 import com.financetracker.app.ui.components.AiOrb
 import com.financetracker.app.ui.components.BudgetProgressRow
@@ -162,6 +163,7 @@ fun DashboardScreen(
         onSelectCustomRange = viewModel::selectCustomRange,
         onSelectAccount = viewModel::selectAccount,
         onDismissAttention = viewModel::dismissAttention,
+        onAttentionAction = viewModel::performAttention,
         onRefreshSummary = viewModel::refreshSummary,
         onHideSummary = viewModel::hideSummary,
         onOpenAskAi = onOpenAskAi,
@@ -189,6 +191,7 @@ fun DashboardContent(
     onSelectCustomRange: (Long, Long) -> Unit,
     onSelectAccount: (Long?) -> Unit,
     onDismissAttention: (String) -> Unit,
+    onAttentionAction: (AttentionItem) -> Unit,
     onRefreshSummary: () -> Unit,
     onHideSummary: () -> Unit,
     onOpenAskAi: () -> Unit,
@@ -282,8 +285,12 @@ fun DashboardContent(
                         true
                     )
                 }
+                // A single account other than the main one is funded by transfers, so what's
+                // left there is what was saved (or kept) this period.
+                val mainAccountId by MainAccountSettings.mainAccountId.collectAsState()
+                val savingsView = state.selectedAccountId != null && state.selectedAccountId != mainAccountId
                 MiniFigure(
-                    "Left",
+                    if (savingsView) "Net saved" else "Left",
                     Formatters.whole(left),
                     if (left >= 0) palette.figureStyle() else TextStyle(color = palette.negative),
                     Modifier.weight(1f),
@@ -315,7 +322,8 @@ fun DashboardContent(
                             filter.uncategorizedOnly
                         )
                     },
-                    onDismiss = onDismissAttention
+                    onDismiss = onDismissAttention,
+                    onAction = onAttentionAction
                 )
             }
         }
@@ -631,7 +639,8 @@ private fun NeedsAttentionCard(
     canAsk: Boolean,
     onAsk: (String) -> Unit,
     onSeeTransactions: (AttentionFilter) -> Unit,
-    onDismiss: (String) -> Unit
+    onDismiss: (String) -> Unit,
+    onAction: (AttentionItem) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
     val palette = LocalAppPalette.current
@@ -648,7 +657,7 @@ private fun NeedsAttentionCard(
                     modifier = Modifier.padding(top = if (i == 0) 10.dp else 0.dp, end = 8.dp),
                     color = MaterialTheme.colorScheme.outlineVariant
                 )
-                AttentionRow(item, canAsk, onAsk, onSeeTransactions, onDismiss)
+                AttentionRow(item, canAsk, onAsk, onSeeTransactions, onDismiss, onAction)
             }
             if (items.size > 3) {
                 Link(if (expanded) "Show less" else "Show all ${items.size}") { expanded = !expanded }
@@ -663,7 +672,8 @@ private fun AttentionRow(
     canAsk: Boolean,
     onAsk: (String) -> Unit,
     onSeeTransactions: (AttentionFilter) -> Unit,
-    onDismiss: (String) -> Unit
+    onDismiss: (String) -> Unit,
+    onAction: (AttentionItem) -> Unit
 ) {
     val palette = LocalAppPalette.current
     val accent = when (item.level) {
@@ -689,6 +699,7 @@ private fun AttentionRow(
                 modifier = Modifier.padding(top = 2.dp)
             )
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                item.action?.let { action -> Link(action.label) { onAction(item) } }
                 item.filter?.let { filter -> Link("See transactions") { onSeeTransactions(filter) } }
                 if (canAsk && item.prompt != null) Link(item.promptLabel) { onAsk(item.prompt) }
             }

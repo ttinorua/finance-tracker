@@ -131,6 +131,7 @@ fun SettingsScreen(
     val state by viewModel.uiState.collectAsState()
     val currencyCode by CurrencySettings.currencyCode.collectAsState()
     val mainAccountId by MainAccountSettings.mainAccountId.collectAsState()
+    val mainAutoPicked by MainAccountSettings.autoPicked.collectAsState()
     val shiftSalaryToNextMonth by BudgetSettings.shiftSalaryToNextMonth.collectAsState()
     val excludeTransfersFromSpending by BudgetSettings.excludeTransfersFromSpending.collectAsState()
     val anticipateRecurringBills by BudgetSettings.anticipateRecurringBills.collectAsState()
@@ -188,7 +189,7 @@ fun SettingsScreen(
                                 ) {
                                     Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                                         Text(
-                                            accountUi.account.name,
+                                            if (mainAccountId == accountUi.account.id) "★ ${accountUi.account.name}" else accountUi.account.name,
                                             style = MaterialTheme.typography.bodyLarge,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
@@ -223,7 +224,8 @@ fun SettingsScreen(
                                     Column(modifier = Modifier.padding(start = 8.dp)) {
                                         Text("Main account", style = MaterialTheme.typography.bodyMedium)
                                         Text(
-                                            "Shown by default on every screen",
+                                            if (isMain && mainAutoPicked) "Picked automatically, usually where your salary lands. Tick another account to change it."
+                                            else "Shown by default on every screen",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -461,7 +463,8 @@ fun SettingsScreen(
                             "income and expense totals, budgets, and the spending breakdown, " +
                             "since they're neither real income nor real spending. When viewing a " +
                             "single account other than your main account, money transferred in " +
-                            "from your other accounts counts as that account's income. Net " +
+                            "from your other accounts counts as that account's income, and money " +
+                            "moved out counts as its spending. Net " +
                             "balance and the account register still include every transaction.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -514,6 +517,7 @@ fun SettingsScreen(
 
 
                     if (page == SettingsPage.LOANS_GOALS) LoansAndGoalsSettings(accounts = state.accounts)
+                    if (page == SettingsPage.RECURRING) RecurringSettings()
 
                     if (page == SettingsPage.ATTENTION) AttentionSettings()
 

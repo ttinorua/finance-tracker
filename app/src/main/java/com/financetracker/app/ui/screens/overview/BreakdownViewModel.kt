@@ -7,6 +7,7 @@ import com.financetracker.app.data.prefs.BankScheduledPayments
 import com.financetracker.app.data.prefs.BudgetSettings
 import com.financetracker.app.data.prefs.DismissedRecurringExpenses
 import com.financetracker.app.data.prefs.FixedExpenseCategories
+import com.financetracker.app.data.prefs.FixedMerchants
 import com.financetracker.app.data.prefs.MainAccountSettings
 import com.financetracker.app.data.prefs.toTransactionDetails
 import com.financetracker.app.data.repository.FinanceRepository
@@ -57,7 +58,7 @@ class BreakdownViewModel(
             BudgetSettings.anticipateRecurringBills
         ) { a, b, c -> Triple(a, b, c) },
         repository.observeCategories(),
-        combine(DismissedRecurringExpenses.dismissed, FixedExpenseCategories.fixedCategoryIds, BankScheduledPayments.payments) { a, b, c ->
+        combine(DismissedRecurringExpenses.dismissed, FixedExpenseCategories.fixedCategoryIds.combine(FixedMerchants.merchants) { ids, _ -> ids }, BankScheduledPayments.payments) { a, b, c ->
             Triple(a, b, c)
         }
     ) { transactions, (shiftSalary, excludeTransfers, anticipate), categories, (dismissed, fixedIds, scheduled) ->
@@ -88,7 +89,8 @@ class BreakdownViewModel(
                 dismissedKeys = dismissed,
                 fixedCategoryIds = fixedIds,
                 scheduled = scheduled.filter { base.accountId == null || it.accountId == base.accountId }.map { it.toTransactionDetails(byId) },
-                excludeTransfers = excludeTransfers
+                excludeTransfers = excludeTransfers,
+                fixedMerchants = FixedMerchants.merchants.value
             ).sumOf { it.amount }
         } else {
             0.0

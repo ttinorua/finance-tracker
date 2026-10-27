@@ -2,6 +2,7 @@ package com.financetracker.app.util
 
 import com.financetracker.app.data.db.entity.TransactionType
 import com.financetracker.app.data.db.entity.TransactionWithDetails
+import com.financetracker.app.util.advisor.FinanceAnalysis
 import java.util.Calendar
 import java.util.TimeZone
 import kotlin.math.abs
@@ -13,6 +14,10 @@ import kotlin.math.abs
  * Applies even if the user marks one of these "Fixe" by mistake — a deliberate hard override, not
  * just the default. */
 private val EXCLUDED_CATEGORIES = setOf("parking", "groceries", "fuel")
+
+/** True for a category that repeats by habit (groceries, parking, fuel), never a bill. */
+fun isHabitCategory(categoryName: String?): Boolean =
+    (categoryName ?: "").trim().lowercase() in EXCLUDED_CATEGORIES
 
 private enum class Cadence { MONTHLY, QUARTERLY, YEARLY, UNKNOWN }
 
@@ -191,7 +196,8 @@ private fun qualifyFixedExpense(
  * Every recurring expense not yet posted in the month being projected for — [monthsAhead] months
  * after [now]'s own month (0 = this month, 1 = next month, and so on) — whose series (same account
  * and merchant) is currently under a category the user has marked "Fixe" ([fixedCategoryIds], set
- * in Settings > Categories). Nothing outside a Fixe category is ever anticipated: guessing from
+ * in Settings > Categories), or whose merchant the user confirmed as fixed ([fixedMerchants], see
+ * [com.financetracker.app.data.prefs.FixedMerchants]). Nothing outside a Fixe category is ever anticipated: guessing from
  * how often a merchant repeats flagged too many ordinary purchases (restaurants, furniture
  * stores) as bills.
  *
@@ -233,7 +239,8 @@ fun anticipatedRecurringExpenses(
     dismissedKeys: Set<String> = emptySet(),
     fixedCategoryIds: Set<Long> = emptySet(),
     scheduled: List<TransactionWithDetails> = emptyList(),
-    excludeTransfers: Boolean = false
+    excludeTransfers: Boolean = false,
+    fixedMerchants: Set<String> = emptySet()
 ): List<AnticipatedExpense> {
     val expenses = transactions.filter { it.type == TransactionType.EXPENSE }
     val nowBucket = monthBucketOf(now)
@@ -286,7 +293,8 @@ fun anticipatedRecurringExpenses(
         if (lastCategory in EXCLUDED_CATEGORIES || isExcludedTransfer(last)) return@mapNotNull null
 
         val lastCategoryId = last.categoryId
-        if (lastCategoryId == null || lastCategoryId !in fixedCategoryIds) return@mapNotNull null
+        val merchantFixed = FinanceAnalysis.merchantOf(last.note) in fixedMerchants
+        if (!merchantFixed && (lastCategoryId == null || lastCategoryId !in fixedCategoryIds)) return@mapNotNull null
         if (sortedTxs.any { monthBucketOf(it.date) == targetBucket }) return@mapNotNull null
 
         val qualification = qualifyFixedExpense(sortedTxs, nowBucket, targetBucket)
@@ -348,7 +356,8 @@ fun anticipatedRecurringExpenseTotal(
     dismissedKeys: Set<String> = emptySet(),
     fixedCategoryIds: Set<Long> = emptySet(),
     scheduled: List<TransactionWithDetails> = emptyList(),
-    excludeTransfers: Boolean = false
+    excludeTransfers: Boolean = false,
+    fixedMerchants: Set<String> = emptySet()
 ): Double = anticipatedRecurringExpenses(
-    transactions, now, monthsAhead, dismissedKeys, fixedCategoryIds, scheduled, excludeTransfers
+    transactions, now, monthsAhead, dismissedKeys, fixedCategoryIds, scheduled, excludeTransfers, fixedMerchants
 ).sumOf { it.amount }

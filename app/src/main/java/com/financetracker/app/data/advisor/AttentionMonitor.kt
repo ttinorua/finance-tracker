@@ -31,11 +31,13 @@ import com.financetracker.app.data.prefs.BudgetSettings
 import com.financetracker.app.data.prefs.CurrencySettings
 import com.financetracker.app.data.prefs.EnableBankingPrefs
 import com.financetracker.app.data.prefs.FixedExpenseCategories
+import com.financetracker.app.data.prefs.FixedMerchants
 import com.financetracker.app.data.prefs.LoansAndGoals
 import com.financetracker.app.data.prefs.MainAccountSettings
 import com.financetracker.app.data.repository.FinanceRepository
 import com.financetracker.app.util.advisor.AttentionChecks
 import com.financetracker.app.util.advisor.AttentionInput
+import com.financetracker.app.util.advisor.AttentionActionKind
 import com.financetracker.app.util.advisor.AttentionItem
 import com.financetracker.app.util.advisor.AttentionLevel
 import com.financetracker.app.util.advisor.BankConsent
@@ -105,6 +107,21 @@ object AttentionMonitor {
         prefs.edit().putStringSet(KEY_DISMISSED, remember(KEY_DISMISSED, listOf(key))).apply()
         _items.value = _items.value.filterNot { it.key == key }
         _dismissals.value++
+    }
+
+    /** Carries out an attention card's one-tap fix, then drops the card and refreshes. */
+    suspend fun perform(repository: FinanceRepository, item: AttentionItem) {
+        val action = item.action ?: return
+        when (action.kind) {
+            AttentionActionKind.MARK_TRANSFER -> action.transactionIds.forEach { id ->
+                val tx = repository.getTransaction(id) ?: return@forEach
+                val category = repository.getOrCreateCategory("Other", "Other (Transfer)", tx.type, "#D32F2F")
+                repository.updateTransaction(tx.copy(categoryId = category.id))
+            }
+            AttentionActionKind.MARK_FIXED_MERCHANT -> action.text?.let { FixedMerchants.setFixed(it, true) }
+        }
+        dismiss(item.key)
+        refresh(repository, seen = true)
     }
 
     private val _dismissals = MutableStateFlow(0)
@@ -177,7 +194,8 @@ object AttentionMonitor {
             backupEnabled = backup.enabled,
             backupLastSuccessAt = backup.lastSuccessAt,
             backupLastError = backup.lastError,
-            userAlerts = UserAlerts.alerts.value
+            userAlerts = UserAlerts.alerts.value,
+            fixedMerchants = FixedMerchants.merchants.value
         )
     }
 

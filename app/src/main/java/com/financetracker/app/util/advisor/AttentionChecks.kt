@@ -9,6 +9,8 @@ import com.financetracker.app.data.db.entity.TransactionWithDetails
 import com.financetracker.app.data.prefs.Loan
 import com.financetracker.app.data.prefs.SavingsGoal
 import com.financetracker.app.util.Formatters
+import com.financetracker.app.util.findLikelyTransfers
+import com.financetracker.app.util.isHabitCategory
 import com.financetracker.app.util.isTransferCategory
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -43,7 +45,25 @@ data class AttentionItem(
     /** What "Ask advisor" / "Fix" sends to the AI advisor. */
     val prompt: String? = null,
     val promptLabel: String = "Ask advisor",
-    val filter: AttentionFilter? = null
+    val filter: AttentionFilter? = null,
+    /** A one-tap fix the app carries out itself (see [AttentionAction]). */
+    val action: AttentionAction? = null
+)
+
+enum class AttentionActionKind {
+    /** Re-categorize [AttentionAction.transactionIds] as "Other (Transfer)". */
+    MARK_TRANSFER,
+    /** Mark the merchant in [AttentionAction.text] as a fixed bill. */
+    MARK_FIXED_MERCHANT
+}
+
+/** A button on an attention card that changes the person's data when tapped: always a
+ * confirmed suggestion, never something done silently. */
+data class AttentionAction(
+    val label: String,
+    val kind: AttentionActionKind,
+    val transactionIds: List<Long> = emptyList(),
+    val text: String? = null
 )
 
 data class BankConsent(val bankName: String, val validUntil: Long?)
@@ -71,7 +91,9 @@ data class AttentionInput(
     val backupLastSuccessAt: Long?,
     val backupLastError: String?,
     /** Alerts the person set up (usually by asking the AI advisor). */
-    val userAlerts: List<UserAlert> = emptyList()
+    val userAlerts: List<UserAlert> = emptyList(),
+    /** Merchants confirmed as fixed bills ([com.financetracker.app.data.prefs.FixedMerchants]). */
+    val fixedMerchants: Set<String> = emptySet()
 )
 
 /**
@@ -98,6 +120,7 @@ object AttentionChecks {
         items += loans(input)
         items += connections(input)
         items += uncategorized(input)
+        items += likelyTransfers(input)
         items += monthlyReview(input, all)
         return items.sortedBy { it.level.ordinal }
     }
@@ -212,7 +235,22 @@ object AttentionChecks {
 
     private fun recurring(input: AttentionInput, all: List<TransactionWithDetails>): List<AttentionItem> {
         val items = mutableListOf<AttentionItem>()
-        for (payment in FinanceAnalysis.recurringPayments(all, input.now)) {
+        val payments = FinanceAnalysis.recurringPayments(all, input.now)
+        // A bill-like repeat that isn't fixed yet: suggest it, a few at a time, biggest first.
+        // Weekly repeats and habit categories (groceries, parking, fuel) are routines, not bills.
+        items += payments.filter { p ->
+            p.cadence != FinanceAnalysis.Cadence.WEEKLY && !isHabitCategory(p.category) &&
+                p.merchant !in input.fixedMerchants && p.categoryId !in input.fixedCategoryIds
+        }.take(3).map { p ->
+            AttentionItem(
+                "fixed-suggest:${p.merchant}", AttentionLevel.INFO,
+                "${display(p.merchant)} looks ${p.cadence.label} (${money(input, p.lastAmount)})",
+                "Mark it as a fixed bill to count it in upcoming expenses. Next one around ${date(p.nextDue)}.",
+                notify = false,
+                action = AttentionAction("Mark as fixed", AttentionActionKind.MARK_FIXED_MERCHANT, text = p.merchant)
+            )
+        }
+        for (payment in payments) {
             val change = payment.priceChangePct
             if (change != null && change >= 5 && input.now - payment.lastDate <= 40 * DAY) {
                 items += AttentionItem(
@@ -342,6 +380,21 @@ object AttentionChecks {
             }
         )
     }
+
+    // ---------------------------------------------------------------- transfers
+
+    /** Money that left one account and arrived in another the same day, not yet marked as a
+     * transfer: otherwise it counts as spending on one side and income on the other. */
+    private fun likelyTransfers(input: AttentionInput): List<AttentionItem> =
+        findLikelyTransfers(input.transactions, input.now).take(5).map { pair ->
+            AttentionItem(
+                pair.key, AttentionLevel.INFO,
+                "Looks like a transfer: ${money(input, pair.out.amount)}",
+                "From ${pair.out.accountName} to ${pair.into.accountName} on ${date(pair.out.date)}. Marking it keeps it out of your spending and income.",
+                notify = false,
+                action = AttentionAction("Mark as transfer", AttentionActionKind.MARK_TRANSFER, listOf(pair.out.id, pair.into.id))
+            )
+        }
 
     // ---------------------------------------------------------------- the app itself
 

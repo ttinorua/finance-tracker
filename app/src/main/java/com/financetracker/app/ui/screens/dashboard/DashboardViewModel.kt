@@ -25,6 +25,7 @@ import com.financetracker.app.data.prefs.CurrencySettings
 import com.financetracker.app.data.prefs.DismissedRecurringExpenses
 import com.financetracker.app.data.prefs.EnableBankingPrefs
 import com.financetracker.app.data.prefs.FixedExpenseCategories
+import com.financetracker.app.data.prefs.FixedMerchants
 import com.financetracker.app.data.prefs.MainAccountSettings
 import com.financetracker.app.data.prefs.ScheduledPayment
 import com.financetracker.app.data.prefs.toTransactionDetails
@@ -137,6 +138,10 @@ class DashboardViewModel(private val repository: FinanceRepository, appContext: 
 
     fun dismissAttention(key: String) = AttentionMonitor.dismiss(key)
 
+    fun performAttention(item: AttentionItem) {
+        viewModelScope.launch { runCatching { AttentionMonitor.perform(repository, item) } }
+    }
+
     /** Whether a bank sync ([EnableBankingSyncWorker]) is currently running — read straight from
      * WorkManager (not tied to any particular screen's lifecycle) so the header's sync spinner
      * reflects the same run whether it was started by the automatic sync-on-app-open or a manual
@@ -175,7 +180,8 @@ class DashboardViewModel(private val repository: FinanceRepository, appContext: 
             },
             BudgetLimits.categoryBudgets,
             DismissedRecurringExpenses.dismissed,
-            FixedExpenseCategories.fixedCategoryIds,
+            // Also recomputes when a merchant is marked fixed (read below via FixedMerchants).
+            FixedExpenseCategories.fixedCategoryIds.combine(FixedMerchants.merchants) { ids, _ -> ids },
             BankScheduledPayments.payments
         ) { partial, categoryBudgets, dismissedRecurring, fixedCategoryIds, scheduledPayments ->
             DashboardExtras(
@@ -247,7 +253,8 @@ class DashboardViewModel(private val repository: FinanceRepository, appContext: 
                 scheduled = scheduledPayments
                     .filter { selectedAccountId == null || it.accountId == selectedAccountId }
                     .map { it.toTransactionDetails(categoriesById) },
-                excludeTransfers = excludeTransfers
+                excludeTransfers = excludeTransfers,
+                fixedMerchants = FixedMerchants.merchants.value
             ).sumOf { it.amount }
         } else {
             0.0

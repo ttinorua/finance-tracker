@@ -52,8 +52,8 @@ class TransferFilterTest {
     }
 
     @Test
-    fun `when transfers in are income an outgoing transfer is still not spending`() {
-        assertFalse(countsTowardTotals(expense, "Other", "Other (Transfer)", excludeTransfers = true, transfersInAreIncome = true))
+    fun `when transfers count for an account an outgoing transfer is its spending`() {
+        assertTrue(countsTowardTotals(expense, "Other", "Other (Transfer)", excludeTransfers = true, transfersInAreIncome = true))
     }
 
     @Test

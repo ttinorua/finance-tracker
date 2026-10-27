@@ -168,8 +168,9 @@ class SettingsViewModel(private val repository: FinanceRepository, private val a
         }
     }
 
+    /** There's always a main account, so this only ever moves it; un-ticking the main one does nothing. */
     fun setMainAccount(account: Account, isMain: Boolean) {
-        MainAccountSettings.setMainAccount(if (isMain) account.id else null)
+        if (isMain) MainAccountSettings.setMainAccount(account.id)
     }
 
     /** Moves every transaction on [source] onto [target] — except ones [target] already has an
