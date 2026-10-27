@@ -374,6 +374,24 @@ object AttentionChecks {
                     prompt = "The interest rate on my loan \"${loan.name}\" resets on ${date(reset)}. What could happen to my payment, and should I consider switching loan type?"
                 )
             },
+            // A home value older than half a year makes friværdi stale.
+            loan.homeValueUpdatedAt?.takeIf { input.now - it > 182 * DAY }?.let { updated ->
+                AttentionItem(
+                    "home-value:${loan.id}:$updated", AttentionLevel.INFO,
+                    "Update your home's value",
+                    "It was last updated ${date(updated)}. Settings > Mortgage uses it for your friværdi.",
+                    notify = false
+                )
+            },
+            // Once a year the årsopgørelse gives the exact debt; the estimate drifts without it.
+            loan.debtAsOf?.takeIf { loan.paymentMerchant.isNotBlank() && input.now - it > 330 * DAY }?.let { asOf ->
+                AttentionItem(
+                    "mortgage-statement:${loan.id}:$asOf", AttentionLevel.INFO,
+                    "${loan.name}: correct the debt with the årsopgørelse",
+                    "The debt has been estimated from payments since ${date(asOf)}. Upload the yearly statement in Settings > Mortgage.",
+                    notify = false
+                )
+            },
             parseDate(loan.interestOnlyUntil)?.takeIf { it - input.now in 0..(180 * DAY) }?.let { end ->
                 AttentionItem(
                     "io-end:${loan.id}:$end", AttentionLevel.WARNING,

@@ -173,7 +173,10 @@ fun LoansAndGoalsSettings(accounts: List<AccountUi>, modifier: Modifier = Modifi
             loan = loan,
             isNew = loans.none { it.id == loan.id },
             onSave = {
-                LoansAndGoals.saveLoan(it)
+                // A newly typed debt is the new exact figure the mortgage estimate starts from.
+                val previous = loans.firstOrNull { l -> l.id == it.id }
+                val debtChanged = previous == null || previous.remainingDebt != it.remainingDebt
+                LoansAndGoals.saveLoan(if (debtChanged && it.remainingDebt != null) it.copy(debtAsOf = System.currentTimeMillis()) else it)
                 editingLoan = null
             },
             onDelete = {

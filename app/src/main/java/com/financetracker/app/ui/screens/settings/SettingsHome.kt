@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.DonutLarge
 import androidx.compose.material.icons.filled.EventRepeat
+import androidx.compose.material.icons.filled.House
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.NotificationsActive
@@ -71,6 +72,7 @@ enum class SettingsPage(val title: String) {
     LOANS_GOALS("Loans & goals"),
     RECURRING("Recurring payments"),
     SHARED_BILLS("Shared bills"),
+    MORTGAGE("Mortgage"),
     AI("AI advisor"),
     BANK("Bank connection"),
     HOUSEHOLD("Household"),
@@ -160,6 +162,13 @@ fun SettingsHome(state: SettingsUiState, onOpen: (SettingsPage) -> Unit) {
                     Icons.Filled.Payments, "Shared bills",
                     if (sharedBills.isSetUp) "Split by net income with ${sharedBills.partnerName.ifBlank { "your partner" }}" else "Split the bills account by income",
                     SettingsPage.SHARED_BILLS
+                ),
+                Line(
+                    Icons.Filled.House, "Mortgage",
+                    loans.firstOrNull { it.kind == "mortgage" }?.let { m ->
+                        if (m.paymentMerchant.isBlank()) "Link the PBS payment to track the debt" else "Debt tracked from its PBS payment"
+                    } ?: "Add it under Loans & goals",
+                    SettingsPage.MORTGAGE
                 ),
                 Line(
                     Icons.Filled.EventRepeat, "Recurring payments",

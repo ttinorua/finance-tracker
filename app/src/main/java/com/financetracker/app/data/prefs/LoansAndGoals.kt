@@ -34,7 +34,18 @@ data class Loan(
     val earlyRepayment: String = "",
     val otherTerms: String = "",
     /** A short English summary of the source document, if the loan was read from one. */
-    val summary: String = ""
+    val summary: String = "",
+    /** The repeating payment (PBS) that pays this loan, by merchant
+     * ([com.financetracker.app.util.advisor.FinanceAnalysis.merchantOf]); blank = not linked. */
+    val paymentMerchant: String = "",
+    /** When [remainingDebt] was last exact (typed in, or read from an årsopgørelse). Payments
+     * after this lower the estimated debt ([com.financetracker.app.util.Mortgage]). */
+    val debtAsOf: Long? = null,
+    /** The home's value as the person typed it in, for friværdi. */
+    val homeValue: Double? = null,
+    val homeValueUpdatedAt: Long? = null,
+    /** The person's share of the home in %, from the skøde; null = not set (show the whole). */
+    val ownershipSharePct: Double? = null
 )
 
 data class SavingsGoal(
@@ -111,6 +122,9 @@ object LoansAndGoals {
         .put("rate_type", loan.rateType).put("next_rate_reset", loan.nextRateReset)
         .put("early_repayment", loan.earlyRepayment).put("other_terms", loan.otherTerms)
         .put("summary", loan.summary)
+        .put("payment_merchant", loan.paymentMerchant).putOpt("debt_as_of", loan.debtAsOf)
+        .putOpt("home_value", loan.homeValue).putOpt("home_value_updated_at", loan.homeValueUpdatedAt)
+        .putOpt("ownership_share_pct", loan.ownershipSharePct)
 
     /** Reads a loan from JSON — the app's own format, or what the document reader returns. */
     fun loanFromJson(json: JSONObject, id: String = json.optString("id").ifBlank { UUID.randomUUID().toString() }): Loan {
@@ -124,7 +138,12 @@ object LoansAndGoals {
             monthlyPayment = num("monthly_payment"), yearsLeft = num("years_left"), endDate = text("end_date"),
             interestOnlyUntil = text("interest_only_until"), rateType = text("rate_type"),
             nextRateReset = text("next_rate_reset"), earlyRepayment = text("early_repayment"),
-            otherTerms = text("other_terms"), summary = text("summary")
+            otherTerms = text("other_terms"), summary = text("summary"),
+            paymentMerchant = text("payment_merchant"),
+            debtAsOf = num("debt_as_of")?.toLong(),
+            homeValue = num("home_value"),
+            homeValueUpdatedAt = num("home_value_updated_at")?.toLong(),
+            ownershipSharePct = num("ownership_share_pct")
         )
     }
 
