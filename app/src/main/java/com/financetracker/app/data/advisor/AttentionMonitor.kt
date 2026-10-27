@@ -32,6 +32,8 @@ import com.financetracker.app.data.prefs.CurrencySettings
 import com.financetracker.app.data.prefs.EnableBankingPrefs
 import com.financetracker.app.data.prefs.FixedExpenseCategories
 import com.financetracker.app.data.prefs.FixedMerchants
+import com.financetracker.app.data.prefs.SharedBillsSettings
+import com.financetracker.app.util.SharedBills
 import com.financetracker.app.data.prefs.LoansAndGoals
 import com.financetracker.app.data.prefs.MainAccountSettings
 import com.financetracker.app.data.repository.FinanceRepository
@@ -171,10 +173,19 @@ object AttentionMonitor {
             balances[goal.accountId]?.let { LoansAndGoals.restoreGoal(goal.copy(startAmount = it, startedAt = goal.startedAt ?: System.currentTimeMillis())) }
         }
         val backup = AutoBackupSettings.state.value
+        val transactions = repository.observeTransactions().first()
+        val now = System.currentTimeMillis()
+        val shared = SharedBillsSettings.setup.value
+        val sharedStatus = shared.accountId?.let { id -> accounts.firstOrNull { it.id == id } }?.let { account ->
+            SharedBills.status(
+                account.id, transactions, balances[account.id] ?: 0.0, SharedBills.averageNetSalary(transactions, now),
+                shared.partnerNetIncome, shared.partnerName, shared.answers, now
+            )
+        }
         return AttentionInput(
-            now = System.currentTimeMillis(),
+            now = now,
             currency = CurrencySettings.currencyCode.value,
-            transactions = repository.observeTransactions().first(),
+            transactions = transactions,
             accounts = accounts,
             balances = balances,
             categories = categories,
@@ -195,7 +206,9 @@ object AttentionMonitor {
             backupLastSuccessAt = backup.lastSuccessAt,
             backupLastError = backup.lastError,
             userAlerts = UserAlerts.alerts.value,
-            fixedMerchants = FixedMerchants.merchants.value
+            fixedMerchants = FixedMerchants.merchants.value,
+            sharedBills = sharedStatus,
+            partnerName = shared.partnerName
         )
     }
 

@@ -21,6 +21,7 @@ import com.financetracker.app.data.prefs.BankReservations
 import com.financetracker.app.data.prefs.BankScheduledPayments
 import com.financetracker.app.data.prefs.EnableBankingPrefs
 import com.financetracker.app.data.prefs.MainAccountSettings
+import com.financetracker.app.data.prefs.SharedBillsSettings
 import com.financetracker.app.data.repository.FinanceRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -162,6 +163,7 @@ class SettingsViewModel(private val repository: FinanceRepository, private val a
         viewModelScope.launch {
             repository.deleteAccount(account)
             MainAccountSettings.onAccountRemoved(account.id)
+            SharedBillsSettings.onAccountRemoved(account.id)
             ViewFilter.onAccountRemoved(account.id)
             BankScheduledPayments.onAccountRemoved(account.id)
             BankReservations.onAccountRemoved(account.id)
@@ -210,6 +212,7 @@ class SettingsViewModel(private val repository: FinanceRepository, private val a
             EnableBankingPrefs.remapAccountLink(source.id, target.id)
             repository.deleteAccount(source)
             MainAccountSettings.onAccountRemoved(source.id, replacementId = target.id)
+            SharedBillsSettings.onAccountRemoved(source.id, replacementId = target.id)
             ViewFilter.onAccountRemoved(source.id, replacementId = target.id)
             BankScheduledPayments.onAccountRemoved(source.id)
             BankReservations.onAccountRemoved(source.id)

@@ -35,6 +35,7 @@ import com.financetracker.app.data.household.HouseholdSync
 import com.financetracker.app.data.prefs.CategoryIconChoices
 import com.financetracker.app.data.prefs.FixedExpenseCategories
 import com.financetracker.app.data.prefs.FixedMerchants
+import com.financetracker.app.data.prefs.SharedBillsSettings
 import com.financetracker.app.data.prefs.LoansAndGoals
 import com.financetracker.app.data.prefs.MainAccountSettings
 import com.financetracker.app.data.prefs.ThemeSettings
@@ -70,6 +71,7 @@ class FinanceApp : Application() {
         AiInsightsCache.init(this)
         DismissedRecurringExpenses.init(this)
         FixedMerchants.init(this)
+        SharedBillsSettings.init(this)
         FixedExpenseCategories.init(this)
         CategoryIconChoices.init(this)
         EnableBankingPrefs.init(this)

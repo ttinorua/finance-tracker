@@ -518,6 +518,7 @@ fun SettingsScreen(
 
                     if (page == SettingsPage.LOANS_GOALS) LoansAndGoalsSettings(accounts = state.accounts)
                     if (page == SettingsPage.RECURRING) RecurringSettings()
+                    if (page == SettingsPage.SHARED_BILLS) SharedBillsPage(state.accounts.map { it.account })
 
                     if (page == SettingsPage.ATTENTION) AttentionSettings()
 

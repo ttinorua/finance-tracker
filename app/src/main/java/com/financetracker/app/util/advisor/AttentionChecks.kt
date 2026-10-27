@@ -9,6 +9,7 @@ import com.financetracker.app.data.db.entity.TransactionWithDetails
 import com.financetracker.app.data.prefs.Loan
 import com.financetracker.app.data.prefs.SavingsGoal
 import com.financetracker.app.util.Formatters
+import com.financetracker.app.util.SharedBillsStatus
 import com.financetracker.app.util.findLikelyTransfers
 import com.financetracker.app.util.isHabitCategory
 import com.financetracker.app.util.isTransferCategory
@@ -93,7 +94,10 @@ data class AttentionInput(
     /** Alerts the person set up (usually by asking the AI advisor). */
     val userAlerts: List<UserAlert> = emptyList(),
     /** Merchants confirmed as fixed bills ([com.financetracker.app.data.prefs.FixedMerchants]). */
-    val fixedMerchants: Set<String> = emptySet()
+    val fixedMerchants: Set<String> = emptySet(),
+    /** The shared bills account's status, when one is set up. */
+    val sharedBills: SharedBillsStatus? = null,
+    val partnerName: String = ""
 )
 
 /**
@@ -121,6 +125,7 @@ object AttentionChecks {
         items += connections(input)
         items += uncategorized(input)
         items += likelyTransfers(input)
+        items += sharedBills(input)
         items += monthlyReview(input, all)
         return items.sortedBy { it.level.ordinal }
     }
@@ -379,6 +384,46 @@ object AttentionChecks {
                 )
             }
         )
+    }
+
+    // ---------------------------------------------------------------- shared bills
+
+    private fun sharedBills(input: AttentionInput): List<AttentionItem> {
+        val status = input.sharedBills ?: return emptyList()
+        val partner = input.partnerName.ifBlank { "Partner" }
+        val month = monthKey(input.now)
+        val day = ((input.now - FinanceAnalysis.monthStart(input.now)) / DAY).toInt() + 1
+        val items = mutableListOf<AttentionItem>()
+        status.warnings.forEach { w ->
+            items += AttentionItem(
+                "shared-short:${w.label}:${w.dueDate}", AttentionLevel.WARNING,
+                "${display(w.label)} ${money(input, w.amount)} due ${date(w.dueDate)}",
+                "The bills account will be ${money(input, w.shortBy)} short. Adding ${money(input, w.extraPerMonth)} a month in total until then covers it.",
+                notify = true
+            )
+        }
+        // Give transfers until the 10th before saying anyone is behind.
+        if (day >= 10) {
+            if (status.partnerShortThisMonth > 0) items += AttentionItem(
+                "shared-partner:$month", AttentionLevel.INFO,
+                "$partner is ${money(input, status.partnerShortThisMonth)} short on shared bills",
+                "Paid ${money(input, status.partnerPaidThisMonth)} of ${money(input, status.partnerTarget)} this month.",
+                notify = false
+            )
+            if (status.myShortThisMonth > 0) items += AttentionItem(
+                "shared-me:$month", AttentionLevel.INFO,
+                "You're ${money(input, status.myShortThisMonth)} short on shared bills",
+                "Paid ${money(input, status.myPaidThisMonth)} of ${money(input, status.myTarget)} this month.",
+                notify = false
+            )
+        }
+        if (status.unknown.isNotEmpty()) items += AttentionItem(
+            "shared-unknown:${status.unknown.joinToString(",") { it.transaction.id.toString() }}", AttentionLevel.INFO,
+            "Who sent this? ${status.unknown.size} payment${if (status.unknown.size == 1) "" else "s"} into the bills account",
+            "Open Settings > Shared bills to say who it was from.",
+            notify = false
+        )
+        return items
     }
 
     // ---------------------------------------------------------------- transfers

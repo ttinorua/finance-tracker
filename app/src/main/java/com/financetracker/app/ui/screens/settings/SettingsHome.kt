@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.DonutLarge
 import androidx.compose.material.icons.filled.EventRepeat
+import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Palette
@@ -53,6 +54,7 @@ import com.financetracker.app.data.prefs.CurrencySettings
 import com.financetracker.app.data.prefs.EnableBankingPrefs
 import com.financetracker.app.data.prefs.FixedExpenseCategories
 import com.financetracker.app.data.prefs.FixedMerchants
+import com.financetracker.app.data.prefs.SharedBillsSettings
 import com.financetracker.app.data.prefs.LoansAndGoals
 import com.financetracker.app.data.prefs.ThemeSettings
 import com.financetracker.app.ui.components.AiOrb
@@ -68,6 +70,7 @@ enum class SettingsPage(val title: String) {
     BUDGETS("Budgets"),
     LOANS_GOALS("Loans & goals"),
     RECURRING("Recurring payments"),
+    SHARED_BILLS("Shared bills"),
     AI("AI advisor"),
     BANK("Bank connection"),
     HOUSEHOLD("Household"),
@@ -85,6 +88,7 @@ fun SettingsHome(state: SettingsUiState, onOpen: (SettingsPage) -> Unit) {
     val currency by CurrencySettings.currencyCode.collectAsState()
     val fixed by FixedExpenseCategories.fixedCategoryIds.collectAsState()
     val fixedMerchants by FixedMerchants.merchants.collectAsState()
+    val sharedBills by SharedBillsSettings.setup.collectAsState()
     val overallBudgets by BudgetLimits.overallBudgets.collectAsState()
     val categoryBudgets by BudgetLimits.categoryBudgets.collectAsState()
     val loans by LoansAndGoals.loans.collectAsState()
@@ -151,6 +155,11 @@ fun SettingsHome(state: SettingsUiState, onOpen: (SettingsPage) -> Unit) {
                         else -> "With ${household.partnerName} · " + if (household.lines.isEmpty()) "no budget yet" else "${household.lines.size} shared categories"
                     },
                     SettingsPage.HOUSEHOLD
+                ),
+                Line(
+                    Icons.Filled.Payments, "Shared bills",
+                    if (sharedBills.isSetUp) "Split by net income with ${sharedBills.partnerName.ifBlank { "your partner" }}" else "Split the bills account by income",
+                    SettingsPage.SHARED_BILLS
                 ),
                 Line(
                     Icons.Filled.EventRepeat, "Recurring payments",
