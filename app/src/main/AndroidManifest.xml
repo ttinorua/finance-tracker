@@ -5,6 +5,8 @@
     <!-- Used for the optional Claude AI features (chat, category suggestions, insights) and
          for the optional Enable Banking bank sync (Sydbank open-banking / PSD2). -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Voice chat: the app records your question itself and sends it to Groq to be written out. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- A first Enable Banking sync (or any sync after local data was wiped) can take far
          longer than Android's ~10 minute background execution limit for ordinary work — the

@@ -1,5 +1,13 @@
 package com.financetracker.app.ui.screens.settings
 
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.RadioButton
+import androidx.compose.ui.semantics.Role
+import com.financetracker.app.data.ai.voice.AdvisorVoice
+import com.financetracker.app.data.ai.voice.GeminiVoice
+import com.financetracker.app.ui.screens.ai.rememberSpeaker
 import androidx.compose.material3.Switch
 import com.financetracker.app.data.ai.chat.AssistantPrefs
 import com.financetracker.app.data.ai.chat.AssistantMemory
@@ -363,11 +371,55 @@ private fun AssistantChoices(chatGptConnected: Boolean) {
         Text("Hands-free voice mode (listen again after each answer)", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
         Switch(checked = handsFree, onCheckedChange = AssistantPrefs::setHandsFree)
     }
+    VoicePicker()
     Text(
-        "Voice uses your phone's own speech recognition and reading voice, so it costs nothing extra.",
+        "Answers are read by a Gemini voice at a calm pace, and Groq's Whisper writes out what you say. " +
+            "Without a Gemini or Groq key, or when their free limit is used up, the phone's own voice and listening take over.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
+}
+
+/** The Gemini voice that reads answers, each with a sample to hear first. */
+@Composable
+private fun VoicePicker() {
+    val chosen by AssistantPrefs.voice.collectAsState()
+    val speaker = rememberSpeaker()
+    var playing by remember { mutableStateOf<AdvisorVoice?>(null) }
+    Text("Reading voice", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 12.dp))
+    if (!GeminiVoice.isAvailable) {
+        Text(
+            "Add a Gemini key above to use these voices. Until then the phone's voice reads the answers.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+    AdvisorVoice.entries.forEach { voice ->
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().selectable(
+                selected = chosen.equals(voice.id, true),
+                role = Role.RadioButton,
+                onClick = { AssistantPrefs.setVoice(voice.id) }
+            )
+        ) {
+            RadioButton(selected = chosen.equals(voice.id, true), onClick = null)
+            Text("${voice.id} · ${voice.description}", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f).padding(start = 8.dp))
+            IconButton(onClick = {
+                if (playing == voice) {
+                    speaker.stop(); playing = null
+                } else {
+                    playing = voice
+                    speaker.speak("Hi, I'm ${voice.id}. I'll read your answers aloud, calmly and clearly.", voice) { playing = null }
+                }
+            }) {
+                Icon(
+                    if (playing == voice) Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                    contentDescription = if (playing == voice) "Stop sample" else "Play ${voice.id} sample"
+                )
+            }
+        }
+    }
 }
 
 /** What the advisor remembers across chats: see, change, delete or add items. */

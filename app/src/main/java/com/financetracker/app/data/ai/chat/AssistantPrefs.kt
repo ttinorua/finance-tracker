@@ -7,14 +7,15 @@ import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * The AI advisor's own choices: which ChatGPT model to use (null = Auto, the model ChatGPT
- * offers apps first), whether every answer is read aloud in the chat, and whether voice mode
- * listens again after each answer.
+ * offers apps first), whether every answer is read aloud in the chat, whether voice mode
+ * listens again after each answer, and which voice reads the answers.
  */
 object AssistantPrefs {
     private const val PREFS_NAME = "finance_prefs"
     private const val KEY_MODEL = "assistant_chatgpt_model"
     private const val KEY_READ_ALOUD = "assistant_read_aloud"
     private const val KEY_HANDS_FREE = "assistant_hands_free"
+    private const val KEY_VOICE = "assistant_voice"
 
     private var prefs: android.content.SharedPreferences? = null
     private val _chatGptModel = MutableStateFlow<String?>(null)
@@ -23,6 +24,9 @@ object AssistantPrefs {
     val readAloud: StateFlow<Boolean> = _readAloud.asStateFlow()
     private val _handsFree = MutableStateFlow(true)
     val handsFree: StateFlow<Boolean> = _handsFree.asStateFlow()
+    /** The Gemini voice answers are read in (see AdvisorVoice); Sulafat, warm, by default. */
+    private val _voice = MutableStateFlow("Sulafat")
+    val voice: StateFlow<String> = _voice.asStateFlow()
 
     fun init(context: Context) {
         val p = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -30,6 +34,12 @@ object AssistantPrefs {
         _chatGptModel.value = p.getString(KEY_MODEL, null)
         _readAloud.value = p.getBoolean(KEY_READ_ALOUD, false)
         _handsFree.value = p.getBoolean(KEY_HANDS_FREE, true)
+        _voice.value = p.getString(KEY_VOICE, null) ?: "Sulafat"
+    }
+
+    fun setVoice(id: String) {
+        _voice.value = id
+        prefs?.edit()?.putString(KEY_VOICE, id)?.apply()
     }
 
     fun setChatGptModel(slug: String?) {
