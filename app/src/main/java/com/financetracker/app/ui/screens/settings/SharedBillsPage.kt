@@ -25,7 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -75,7 +75,10 @@ fun SharedBillsPage(accounts: List<Account>) {
     val transactions by remember { repository.observeTransactions() }.collectAsState(initial = emptyList())
     val currency by CurrencySettings.currencyCode.collectAsState()
     val account = accounts.firstOrNull { it.id == setup.accountId }
-    val balance by produceState(0.0, account, transactions) { value = account?.let { repository.getAccountBalance(it) } ?: 0.0 }
+    var balance by remember { mutableStateOf(0.0) }
+    LaunchedEffect(account, transactions) {
+        balance = account?.let { repository.getAccountBalance(it) } ?: 0.0
+    }
     val now = remember { System.currentTimeMillis() }
     val myIncome = remember(transactions) { SharedBills.averageNetSalary(transactions, now) }
     val status = remember(transactions, setup, balance) {
