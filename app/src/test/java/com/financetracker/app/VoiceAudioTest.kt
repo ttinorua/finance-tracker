@@ -41,6 +41,17 @@ class VoiceAudioTest {
     }
 
     @Test
+    fun `without a fixed level it learns the room's background first`() {
+        val end = VoiceAudio.EndOfSpeech(silenceMs = 500, calibrateMs = 300)
+        repeat(3) { assertFalse(end.feed(100.0, 100)) }
+        assertEquals(300.0, end.speechLevel, 0.001)
+        assertFalse(end.feed(250.0, 100))
+        assertFalse(end.heardSpeech)
+        assertFalse(end.feed(400.0, 100))
+        assertTrue(end.heardSpeech)
+    }
+
+    @Test
     fun `loudness of silence is zero`() {
         assertEquals(0.0, VoiceAudio.rms(ShortArray(10)), 0.0)
         assertEquals(1000.0, VoiceAudio.rms(ShortArray(10) { 1000 }), 0.001)

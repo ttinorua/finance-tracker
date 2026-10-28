@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.Switch
@@ -93,10 +94,13 @@ class SpeechInput internal constructor(
     private val onStart: () -> Unit,
     private val onFinish: () -> Unit,
     listeningState: androidx.compose.runtime.State<Boolean>,
-    transcribingState: androidx.compose.runtime.State<Boolean>
+    transcribingState: androidx.compose.runtime.State<Boolean>,
+    levelState: androidx.compose.runtime.State<Float>
 ) {
     val listening by listeningState
     val transcribing by transcribingState
+    /** How loud the microphone hears you right now, 0..1, for the level bar. */
+    val level by levelState
     fun start() = onStart()
     fun finish() = onFinish()
 }
@@ -108,7 +112,8 @@ fun rememberSpeechInput(onResult: (String?) -> Unit): SpeechInput {
     val scope = rememberCoroutineScope()
     val listening = remember { mutableStateOf(false) }
     val transcribing = remember { mutableStateOf(false) }
-    val recorder = remember { VoiceRecorder() }
+    val level = remember { mutableStateOf(0f) }
+    val recorder = remember { VoiceRecorder { level.value = it } }
     DisposableEffect(recorder) { onDispose { recorder.cancel() } }
 
     // The phone's own "speak now" prompt: the fallback.
@@ -134,6 +139,7 @@ fun rememberSpeechInput(onResult: (String?) -> Unit): SpeechInput {
         scope.launch {
             val wav = recorder.record()
             listening.value = false
+            level.value = 0f
             if (wav == null) { latest(null); return@launch }
             transcribing.value = true
             val text = runCatching { GroqTranscriber.transcribe(wav) }.getOrNull()
@@ -156,13 +162,14 @@ fun rememberSpeechInput(onResult: (String?) -> Unit): SpeechInput {
             },
             onFinish = { recorder.finishEarly() },
             listeningState = listening,
-            transcribingState = transcribing
+            transcribingState = transcribing,
+            levelState = level
         )
     }
 }
 
 /** Records one question from the microphone, stopping by itself once you've gone quiet. */
-private class VoiceRecorder {
+private class VoiceRecorder(private val onLevel: (Float) -> Unit) {
     private val rate = 16_000
     @Volatile private var finishRequested = false
     @Volatile private var cancelled = false
@@ -191,13 +198,17 @@ private class VoiceRecorder {
                 val bytes = ByteArray(n * 2)
                 for (i in 0 until n) { bytes[2 * i] = (block[i].toInt() and 0xff).toByte(); bytes[2 * i + 1] = (block[i].toInt() shr 8).toByte() }
                 out.write(bytes)
-                if (end.feed(VoiceAudio.rms(block, n), n * 1000L / rate) || finishRequested) break
+                val rms = VoiceAudio.rms(block, n)
+                onLevel((rms / (end.speechLevel * 4)).coerceIn(0.0, 1.0).toFloat())
+                if (end.feed(rms, n * 1000L / rate) || finishRequested) break
             }
         } finally {
             runCatching { audio.stop() }
             audio.release()
         }
-        if (cancelled || !end.heardSpeech) null else VoiceAudio.wav(out.toByteArray(), rate)
+        // Tapping "done" always sends what was recorded: you know you spoke, even if it was quiet.
+        val tooShort = out.size() < rate // under half a second (2 bytes a sample)
+        if (cancelled || tooShort || (!end.heardSpeech && !finishRequested)) null else VoiceAudio.wav(out.toByteArray(), rate)
     }
 }
 
@@ -432,6 +443,13 @@ fun VoiceMode(
             GlassCard(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
                     status?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) }
+                    // A bar that moves with your voice, so you can see the app hears you.
+                    if (input.listening) {
+                        LinearProgressIndicator(
+                            progress = { input.level },
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                        )
+                    }
                     if (!isThinking) lastAnswer?.let { Text(speakableText(it), style = MaterialTheme.typography.bodyMedium) }
                 }
             }
