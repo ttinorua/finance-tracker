@@ -6,6 +6,13 @@ import android.util.Log
 import com.financetracker.app.BuildConfig
 import com.financetracker.app.data.db.entity.TransactionType
 import com.financetracker.app.data.prefs.EnableBankingPrefs
+import com.financetracker.app.data.prefs.FixedMerchants
+import com.financetracker.app.data.prefs.SharedBillsSettings
+import com.financetracker.app.util.CardPayment
+import com.financetracker.app.util.PartnerReport
+import com.financetracker.app.util.SharedBills
+import com.financetracker.app.util.SharedBillsInput
+import com.financetracker.app.util.SharedLine
 import com.financetracker.app.data.repository.FinanceRepository
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
@@ -49,6 +56,8 @@ data class HouseholdState(
     val members: List<HouseholdMember> = emptyList(),
     val lines: List<HouseholdBudgetLine> = emptyList(),
     val reports: List<MemberReport> = emptyList(),
+    /** Each phone's shared-bills report (see [SharedBillsMemberReport]). */
+    val sharedBills: List<SharedBillsMemberReport> = emptyList(),
     val includedAccountIds: Set<Long> = emptySet(),
     val shareDetails: Boolean = true,
     val busy: Boolean = false,
@@ -59,6 +68,7 @@ data class HouseholdState(
     val partnerName: String get() = partner?.name?.ifBlank { null } ?: "Partner"
     val partnerUpdatedAt: Long? get() = reports.filter { it.uid != myUid }.maxOfOrNull { it.updatedAt }
     fun memberName(uid: String) = members.firstOrNull { it.uid == uid }?.name ?: "Partner"
+    val partnerSharedBills: SharedBillsMemberReport? get() = sharedBills.firstOrNull { it.uid != myUid }
 }
 
 /**
@@ -75,6 +85,7 @@ object HouseholdSync {
     private const val TAG = "HouseholdSync"
     private const val PREFS = "household_prefs"
     private const val INVITE_HOURS = 48L
+    private const val SHARED_SUFFIX = "_sharedbills"
 
     private lateinit var prefs: SharedPreferences
     private lateinit var repository: FinanceRepository
@@ -127,8 +138,9 @@ object HouseholdSync {
             combine(
                 repository.observeTransactions(),
                 state.map { listOf(it.householdId, it.lines.map { l -> l.mainCategory }.sorted(), it.includedAccountIds, it.shareDetails) }
-                    .distinctUntilChanged()
-            ) { _, _ -> Unit }
+                    .distinctUntilChanged(),
+                SharedBillsSettings.setup
+            ) { _, _, _ -> Unit }
                 .debounce(2_000)
                 .collect { runCatching { publish() }.onFailure { Log.w(TAG, "publish", it) } }
         }
@@ -356,8 +368,12 @@ object HouseholdSync {
         }
         listeners += ref.collection("spending").addSnapshotListener { snap, e ->
             if (e != null || snap == null) return@addSnapshotListener
-            val reports = snap.documents.mapNotNull { doc -> runCatching { readReport(householdKey, doc.id, doc.getString("data").orEmpty(), doc.getLong("updatedAt") ?: 0L) }.getOrNull() }
-            _state.update { it.copy(reports = reports) }
+            val (shared, spending) = snap.documents.partition { it.id.endsWith(SHARED_SUFFIX) }
+            val reports = spending.mapNotNull { doc -> runCatching { readReport(householdKey, doc.id, doc.getString("data").orEmpty(), doc.getLong("updatedAt") ?: 0L) }.getOrNull() }
+            val sharedReports = shared.mapNotNull { doc ->
+                runCatching { readSharedBills(householdKey, doc.id.removeSuffix(SHARED_SUFFIX), doc.getString("data").orEmpty(), doc.getLong("updatedAt") ?: 0L) }.getOrNull()
+            }
+            _state.update { it.copy(reports = reports, sharedBills = sharedReports) }
         }
     }
 
@@ -415,6 +431,72 @@ object HouseholdSync {
             spending.document(docId).set(mapOf("data" to HouseholdCrypto.encryptText(householdKey, text), "updatedAt" to now)).await()
             published[docId] = text.hashCode()
         }
+        publishSharedBills(id, householdKey, uid, now)
+    }
+
+    /**
+     * Shares your side of the shared bills with your partner's phone (Settings > Shared bills >
+     * "Share with household"): kept in the same "spending" collection as "<uid>_sharedbills", so the
+     * existing security rules already let only you write it. Encrypted like everything else.
+     * Switched off, the report is removed.
+     */
+    private suspend fun publishSharedBills(householdId: String, householdKey: ByteArray, uid: String, now: Long) {
+        val setup = SharedBillsSettings.setup.value
+        val doc = firestore().collection("households").document(householdId).collection("spending").document(uid + SHARED_SUFFIX)
+        if (!setup.shareWithHousehold) {
+            if (published[doc.id] != 0) { doc.delete().await(); published[doc.id] = 0 }
+            return
+        }
+        val transactions = repository.observeTransactions().first()
+        val side = SharedBills.mySide(transactions, setup.accountId, setup.sharedMerchants, FixedMerchants.merchants.value, now)
+        fun lines(list: List<CardPayment>) = JSONArray().apply { list.forEach { put(JSONArray().put(it.name).put(it.amount).put(it.date)) } }
+        val json = JSONObject()
+            .put("income", side.netIncome)
+            .put("bills", JSONArray().apply { side.bills.forEach { put(JSONArray().put(it.name).put(it.monthly)) } })
+            .put("card", lines(side.cardPayments))
+            .put("out", lines(side.transfersOut))
+        // With the split set up on this phone, also share the screen's numbers.
+        val account = setup.accountId?.let { id -> repository.getAccounts().firstOrNull { it.id == id } }
+        if (account != null) {
+            val partner = _state.value.partnerSharedBills?.side
+            val status = SharedBills.status(
+                SharedBillsInput(
+                    account.id, transactions, repository.getAccountBalance(account), side.netIncome, setup.partnerNetIncome,
+                    setup.partnerName, setup.answers, setup.sharedMerchants, FixedMerchants.merchants.value, setup.partnerBills,
+                    setup.lockedMySharePct, setup.startedAt, setup.history, partner, now
+                )
+            )
+            json.put("status", JSONObject()
+                .put("account", account.name).put("month", monthKey(now)).put("share", status.myShare).put("bills", status.monthlyBills)
+                .put("t", status.myTarget).put("ot", status.partnerTarget).put("tr", status.myToTransfer).put("otr", status.partnerToTransfer)
+                .put("in", status.myPaidInThisMonth).put("oin", status.partnerPaidInThisMonth)
+                .put("bal", status.myBalance).put("obal", status.partnerBalance))
+        }
+        val text = json.toString()
+        if (published[doc.id] == text.hashCode()) return
+        doc.set(mapOf("data" to HouseholdCrypto.encryptText(householdKey, text), "updatedAt" to now)).await()
+        published[doc.id] = text.hashCode()
+    }
+
+    private fun readSharedBills(householdKey: ByteArray, uid: String, sealed: String, updatedAt: Long): SharedBillsMemberReport {
+        val json = JSONObject(HouseholdCrypto.decryptText(householdKey, sealed))
+        fun payments(key: String) = json.optJSONArray(key)?.let { a ->
+            (0 until a.length()).map { i -> a.getJSONArray(i).let { CardPayment(it.optString(0), it.getDouble(1), it.getLong(2)) } }
+        }.orEmpty()
+        val side = PartnerReport(
+            netIncome = json.optDouble("income", 0.0),
+            bills = json.optJSONArray("bills")?.let { a -> (0 until a.length()).map { i -> a.getJSONArray(i).let { SharedLine(it.getString(0), it.getDouble(1)) } } }.orEmpty(),
+            cardPayments = payments("card"),
+            transfersOut = payments("out")
+        )
+        val snapshot = json.optJSONObject("status")?.let { o ->
+            SharedBillsSnapshot(
+                o.optString("account"), o.optString("month"), o.optDouble("share"), o.optDouble("bills"),
+                o.optDouble("t"), o.optDouble("ot"), o.optDouble("tr"), o.optDouble("otr"),
+                o.optDouble("in"), o.optDouble("oin"), o.optDouble("bal"), o.optDouble("obal")
+            )
+        }
+        return SharedBillsMemberReport(uid, side, snapshot, updatedAt)
     }
 
     private fun readReport(householdKey: ByteArray, docId: String, sealed: String, updatedAt: Long): MemberReport {

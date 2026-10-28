@@ -12,11 +12,13 @@ import com.financetracker.app.util.Formatters
 import com.financetracker.app.util.SharedBillsStatus
 import com.financetracker.app.util.findLikelyTransfers
 import com.financetracker.app.util.isHabitCategory
+import com.financetracker.app.util.isSalaryCategory
 import com.financetracker.app.util.isTransferCategory
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /** Most important first. GOOD is good news (a goal reached). */
 enum class AttentionLevel { URGENT, WARNING, INFO, GOOD }
@@ -97,7 +99,9 @@ data class AttentionInput(
     val fixedMerchants: Set<String> = emptySet(),
     /** The shared bills account's status, when one is set up. */
     val sharedBills: SharedBillsStatus? = null,
-    val partnerName: String = ""
+    val partnerName: String = "",
+    /** When the partner's income was last typed in (Shared bills), for the yearly reminder. */
+    val partnerIncomeUpdatedAt: Long? = null
 )
 
 /**
@@ -425,13 +429,32 @@ object AttentionChecks {
             if (status.partnerShortThisMonth > 0) items += AttentionItem(
                 "shared-partner:$month", AttentionLevel.INFO,
                 "$partner is ${money(input, status.partnerShortThisMonth)} short on shared bills",
-                "Paid ${money(input, status.partnerPaidThisMonth)} of ${money(input, status.partnerTarget)} this month.",
+                "Paid in ${money(input, status.partnerPaidInThisMonth)} of ${money(input, status.partnerToTransfer)} this month.",
                 notify = false
             )
             if (status.myShortThisMonth > 0) items += AttentionItem(
                 "shared-me:$month", AttentionLevel.INFO,
                 "You're ${money(input, status.myShortThisMonth)} short on shared bills",
-                "Paid ${money(input, status.myPaidThisMonth)} of ${money(input, status.myTarget)} this month.",
+                "Paid in ${money(input, status.myPaidInThisMonth)} of ${money(input, status.myToTransfer)} this month.",
+                notify = false
+            )
+        }
+        // 1m: payday — salary landed in the last 3 days and this month's transfer isn't done yet.
+        val paidRecently = input.transactions.any {
+            it.type == TransactionType.INCOME && isSalaryCategory(it.mainCategoryName, it.categoryName) && input.now - it.date in 0..(3 * DAY)
+        }
+        if (paidRecently && status.hasTarget && status.myShortThisMonth > 0) items += AttentionItem(
+            "shared-payday:$month", AttentionLevel.INFO,
+            "Payday: transfer ${money(input, status.myShortThisMonth)} to the bills account",
+            "Your ${(status.myShare * 100).roundToInt()}% share of the shared bills, minus the bills you already paid by card.",
+            notify = true
+        )
+        // 1k: a typed-in income goes stale; once a year, ask to check it.
+        if (!status.partnerConnected) input.partnerIncomeUpdatedAt?.takeIf { input.now - it > 365 * DAY }?.let { at ->
+            items += AttentionItem(
+                "shared-partner-income:$at", AttentionLevel.INFO,
+                "Is $partner's income still ${money(input, status.partnerIncome)}?",
+                "It was typed in ${date(at)}. Update it in Settings > Shared bills so the split stays fair.",
                 notify = false
             )
         }

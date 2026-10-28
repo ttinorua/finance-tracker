@@ -92,3 +92,29 @@ object HouseholdMath {
         }.sortedByDescending { it.transaction.date }
     }
 }
+
+/** The shared-bills screen as the phone that set it up sees it, so the partner's phone shows the
+ * same numbers. "Publisher" is the phone that wrote it. */
+data class SharedBillsSnapshot(
+    val accountName: String,
+    val month: String,
+    val publisherShare: Double,
+    val monthlyBills: Double,
+    val publisherTarget: Double,
+    val otherTarget: Double,
+    val publisherToTransfer: Double,
+    val otherToTransfer: Double,
+    val publisherPaidIn: Double,
+    val otherPaidIn: Double,
+    val publisherBalance: Double,
+    val otherBalance: Double
+)
+
+/** One phone's shared-bills report: its own side (income, shared card bills, transfers out) and,
+ * if it has the split set up, the screen's numbers. */
+data class SharedBillsMemberReport(
+    val uid: String,
+    val side: com.financetracker.app.util.PartnerReport,
+    val snapshot: SharedBillsSnapshot?,
+    val updatedAt: Long
+)

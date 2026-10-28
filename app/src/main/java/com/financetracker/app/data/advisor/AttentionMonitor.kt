@@ -34,6 +34,8 @@ import com.financetracker.app.data.prefs.FixedExpenseCategories
 import com.financetracker.app.data.prefs.FixedMerchants
 import com.financetracker.app.data.prefs.SharedBillsSettings
 import com.financetracker.app.util.SharedBills
+import com.financetracker.app.util.SharedBillsInput
+import com.financetracker.app.data.household.HouseholdSync
 import com.financetracker.app.data.prefs.LoansAndGoals
 import com.financetracker.app.data.prefs.MainAccountSettings
 import com.financetracker.app.data.repository.FinanceRepository
@@ -178,9 +180,13 @@ object AttentionMonitor {
         val shared = SharedBillsSettings.setup.value
         val sharedStatus = shared.accountId?.let { id -> accounts.firstOrNull { it.id == id } }?.let { account ->
             SharedBills.status(
-                account.id, transactions, balances[account.id] ?: 0.0, SharedBills.averageNetSalary(transactions, now),
-                shared.partnerNetIncome, shared.partnerName, shared.answers, now
-            )
+                SharedBillsInput(
+                    account.id, transactions, balances[account.id] ?: 0.0, SharedBills.averageNetSalary(transactions, now),
+                    shared.partnerNetIncome, shared.partnerName, shared.answers, shared.sharedMerchants, FixedMerchants.merchants.value,
+                    shared.partnerBills, shared.lockedMySharePct, shared.startedAt, shared.history,
+                    HouseholdSync.state.value.partnerSharedBills?.side, now
+                )
+            ).also { if (it.hasTarget) SharedBillsSettings.recordMonth(SharedBills.monthKey(now), it.myTarget, it.partnerTarget) }
         }
         return AttentionInput(
             now = now,
@@ -208,7 +214,8 @@ object AttentionMonitor {
             userAlerts = UserAlerts.alerts.value,
             fixedMerchants = FixedMerchants.merchants.value,
             sharedBills = sharedStatus,
-            partnerName = shared.partnerName
+            partnerName = shared.partnerName,
+            partnerIncomeUpdatedAt = shared.partnerIncomeUpdatedAt
         )
     }
 
