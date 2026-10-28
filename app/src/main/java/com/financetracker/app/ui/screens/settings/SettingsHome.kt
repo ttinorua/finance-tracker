@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.DonutLarge
 import androidx.compose.material.icons.filled.EventRepeat
 import androidx.compose.material.icons.filled.House
+import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.NotificationsActive
@@ -72,6 +73,7 @@ enum class SettingsPage(val title: String) {
     LOANS_GOALS("Loans & goals"),
     RECURRING("Recurring payments"),
     SHARED_BILLS("Shared bills"),
+    BILLS_AHEAD("Bills ahead"),
     MORTGAGE("Mortgage"),
     AI("AI advisor"),
     BANK("Bank connection"),
@@ -162,6 +164,11 @@ fun SettingsHome(state: SettingsUiState, onOpen: (SettingsPage) -> Unit) {
                     Icons.Filled.Payments, "Shared bills",
                     if (sharedBills.isSetUp) "Split by net income with ${sharedBills.partnerName.ifBlank { "your partner" }}" else "Split the bills account by income",
                     SettingsPage.SHARED_BILLS
+                ),
+                Line(
+                    Icons.Filled.Timeline, "Bills ahead",
+                    if (sharedBills.isSetUp) "Is the bills account covered? 3, 6 or 12 months" else "Set up Shared bills first",
+                    SettingsPage.BILLS_AHEAD
                 ),
                 Line(
                     Icons.Filled.House, "Mortgage",

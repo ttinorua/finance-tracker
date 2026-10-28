@@ -49,6 +49,9 @@ data class PartnerReport(
     val transfersOut: List<CardPayment>
 )
 
+/** A bill the bills account will pay: [amount] each time, next on [nextDue], every [everyMonths] months. */
+data class UpcomingBill(val name: String, val amount: Double, val nextDue: Long, val everyMonths: Int)
+
 /** A recurring bill on your own accounts that could be shared (ticked in Shared bills). */
 data class SharedCandidate(val merchant: String, val monthly: Double, val label: String, val accountName: String?)
 
@@ -236,6 +239,63 @@ object SharedBills {
         )
     }
 
+    /** Everything paid out of the bills account, except money moved back to you or the partner. */
+    private fun budgetOutflows(input: SharedBillsInput): List<TransactionWithDetails> {
+        val partnerWords = words(input.partnerName)
+        val others = input.transactions.filter { it.accountId != input.billsAccountId }
+        fun isTransferBack(tx: TransactionWithDetails): Boolean =
+            isTransferCategory(tx.mainCategoryName, tx.categoryName) ||
+                (partnerWords.isNotEmpty() && partnerWords.any { it in tx.note.lowercase() }) ||
+                others.any { it.type == TransactionType.INCOME && abs(it.amount - tx.amount) < 0.005 && abs(it.date - tx.date) <= DAY }
+        return input.transactions.filter { it.accountId == input.billsAccountId && it.type == TransactionType.EXPENSE && !isTransferBack(it) }
+    }
+
+    /**
+     * The bills the bills account will pay from now on, each with its next due date and how many
+     * months apart it comes (for "Bills ahead"). A bill the app has seen repeat keeps its real rhythm
+     * (a yearly insurance stays yearly); anything else paid from the account counts as monthly at its
+     * monthly average. With [includeTicked], your bills ticked as shared (still paid from your own
+     * account) are counted too, as if already moved here.
+     */
+    fun upcomingBills(input: SharedBillsInput, includeTicked: Boolean): List<UpcomingBill> {
+        val now = input.now
+        val outflows = budgetOutflows(input).filter { it.date >= now - 365 * DAY }
+        fun months(c: FinanceAnalysis.Cadence) = when (c) {
+            FinanceAnalysis.Cadence.QUARTERLY -> 3
+            FinanceAnalysis.Cadence.YEARLY -> 12
+            else -> 1
+        }
+        fun fromRecurring(p: FinanceAnalysis.RecurringPayment, name: String) =
+            if (p.cadence == FinanceAnalysis.Cadence.WEEKLY) UpcomingBill(name, p.monthlyCost, p.nextDue, 1)
+            else UpcomingBill(name, p.lastAmount, p.nextDue, months(p.cadence))
+        val recurring = FinanceAnalysis.recurringPayments(outflows, now).associateBy { it.merchant }
+        val first = outflows.minOfOrNull { it.date } ?: now
+        val historyMonths = ((now - first).toDouble() / (30.44 * DAY)).coerceAtLeast(1.0)
+        val result = outflows.groupBy { FinanceAnalysis.merchantOf(it.note) }.map { (m, txs) ->
+            recurring[m]?.let { fromRecurring(it, label(m)) }
+                ?: UpcomingBill(label(m.ifBlank { "Other" }), txs.sumOf { it.amount } / historyMonths, oneMonthAfter(txs.maxOf { it.date }, now), 1)
+        }.toMutableList()
+        if (includeTicked) {
+            val onBudget = outflows.map { FinanceAnalysis.merchantOf(it.note) }
+            val mine = input.transactions.filter { it.accountId != input.billsAccountId && it.type == TransactionType.EXPENSE }
+            val mineRecurring = FinanceAnalysis.recurringPayments(mine, now).associateBy { it.merchant }
+            candidates(input.transactions, input.billsAccountId, input.fixedMerchants + input.sharedMerchants, now)
+                .filter { it.merchant in input.sharedMerchants && onBudget.none { b -> sameMerchant(b, it.merchant) } }
+                .forEach { c ->
+                    result += mineRecurring[c.merchant]?.let { fromRecurring(it, label(c.merchant)) }
+                        ?: UpcomingBill(label(c.merchant), c.monthly, oneMonthAfter(now, now), 1)
+                }
+        }
+        return result.sortedByDescending { it.amount }
+    }
+
+    /** One month after [date], moved forward until it's after [now]. */
+    private fun oneMonthAfter(date: Long, now: Long): Long {
+        var d = nextAfter(date, FinanceAnalysis.Cadence.MONTHLY)
+        while (d < FinanceAnalysis.monthStart(now)) d = nextAfter(d, FinanceAnalysis.Cadence.MONTHLY)
+        return d
+    }
+
     fun status(input: SharedBillsInput): SharedBillsStatus {
         val now = input.now
         val partnerWords = words(input.partnerName)
@@ -243,11 +303,7 @@ object SharedBills {
         val others = input.transactions.filter { it.accountId != input.billsAccountId }
 
         // 1a + 1i: everything paid out of the bills account, except money moved back to you or the partner.
-        fun isTransferBack(tx: TransactionWithDetails): Boolean =
-            isTransferCategory(tx.mainCategoryName, tx.categoryName) ||
-                (partnerWords.isNotEmpty() && partnerWords.any { it in tx.note.lowercase() }) ||
-                others.any { it.type == TransactionType.INCOME && abs(it.amount - tx.amount) < 0.005 && abs(it.date - tx.date) <= DAY }
-        val outflows = onAccount.filter { it.type == TransactionType.EXPENSE && !isTransferBack(it) }
+        val outflows = budgetOutflows(input)
         val firstOnAccount = onAccount.minOfOrNull { it.date }
         val windowStart = maxOf(firstOnAccount ?: now, now - 365 * DAY)
         val historyMonths = ((now - windowStart).toDouble() / (30.44 * DAY)).coerceAtLeast(0.0)
