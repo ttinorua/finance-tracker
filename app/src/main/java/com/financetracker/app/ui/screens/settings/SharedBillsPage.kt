@@ -234,9 +234,9 @@ fun SharedBillsPage(accounts: List<Account>) {
                 Text("Rough for now: under 3 months of history. It becomes the real monthly average over time.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Text("2 · Your card bills ticked as shared", style = MaterialTheme.typography.titleSmall)
+            Text("2 · Your bills ticked as shared", style = MaterialTheme.typography.titleSmall)
             if (status.myBills.isEmpty()) Text("None ticked yet (see below).", style = MaterialTheme.typography.bodySmall)
-            status.myBills.forEach { Line(it.name, "your card", money(it.monthly)) }
+            status.myBills.forEach { Line(it.name, it.via, money(it.monthly)) }
             if (status.movedToBudget.isNotEmpty()) {
                 Text("Now paid from the bills account, so not counted twice: ${status.movedToBudget.joinToString()}.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }

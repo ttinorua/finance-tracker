@@ -28,7 +28,7 @@ data class PartnerBill(val id: String, val name: String, val amount: Double, val
 }
 
 /** One line of the bill total: a name and what it costs per month. */
-data class SharedLine(val name: String, val monthly: Double)
+data class SharedLine(val name: String, val monthly: Double, val via: String = "")
 
 /** One payment into the bills account and who it's counted for (null: the app doesn't know yet,
  * so it asks "Who sent this?"). */
@@ -166,7 +166,27 @@ object SharedBills {
 
     private fun words(name: String) = name.trim().lowercase().split(Regex("\\s+")).filter { it.length >= 3 }
 
-    private fun sameMerchant(a: String, b: String) = a.isNotBlank() && b.isNotBlank() && (a == b || a.startsWith(b) || b.startsWith(a))
+    /** Words the bank puts in front of a payment to say how it was paid, not who it went to:
+     * "MCD Telenor" (card) and "MobilePay Telenor" are both Telenor. */
+    private val CHANNEL_WORDS = setOf("mcd", "bs", "pbs", "mobilepay", "mp", "nets", "visa", "mc", "dankort", "betalingsservice", "dk")
+
+    private fun coreWords(merchant: String) = merchant.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotBlank() && it !in CHANNEL_WORDS }
+
+    /** Same merchant once the payment-channel words are dropped: all words of the shorter name
+     * appear in the longer one, allowing one to be a prefix of the other ("netflix" / "netflix.com"). */
+    internal fun sameMerchant(a: String, b: String): Boolean {
+        val x = coreWords(a)
+        val y = coreWords(b)
+        if (x.isEmpty() || y.isEmpty()) return false
+        val (short, long) = if (x.size <= y.size) x to y else y to x
+        // Short words ("ok", "el") must match exactly; longer ones may be a prefix ("netflix" / "netflixcom").
+        fun close(w: String, v: String) = w == v || (minOf(w.length, v.length) >= 4 && (w.startsWith(v) || v.startsWith(w)))
+        return short.all { w -> long.any { close(w, it) } }
+    }
+
+    /** How a bill on your own accounts is paid, from the bank's prefix. */
+    private fun viaOf(merchant: String) =
+        if (merchant.lowercase().split(' ').firstOrNull() in setOf("bs", "pbs")) "your account (PBS)" else "your card"
 
     private fun label(merchant: String) = merchant.split(' ').joinToString(" ") { w -> w.replaceFirstChar { it.uppercase() } }
 
@@ -243,7 +263,7 @@ object SharedBills {
         val ticked = candidates(input.transactions, input.billsAccountId, input.fixedMerchants + input.sharedMerchants, now)
             .filter { it.merchant in input.sharedMerchants }
         val (moved, myBillsKept) = ticked.partition { c -> recentOnBudget.any { sameMerchant(it, c.merchant) } }
-        val myBills = myBillsKept.map { SharedLine(label(it.merchant), it.monthly) }
+        val myBills = myBillsKept.map { SharedLine(label(it.merchant), it.monthly, viaOf(it.merchant)) }
         val myBillMerchants = myBillsKept.map { it.merchant }.toSet()
 
         // 1g / 2b: the partner's card bills, from their phone when connected, else typed in.

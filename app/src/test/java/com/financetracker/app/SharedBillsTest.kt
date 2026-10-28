@@ -96,6 +96,24 @@ class SharedBillsTest {
     }
 
     @Test
+    fun `a bill is the same whatever the bank puts in front of it`() {
+        val telenor = (5..9).map { tx(mine, 719.6, TransactionType.EXPENSE, utc(2026, it, 6), "MCD Telenor", "Media", "Phone") }
+        val txs = newAccount() + telenor + tx(bills, 719.6, TransactionType.EXPENSE, utc(2026, 10, 6), "MobilePay Telenor")
+        val s = SharedBills.status(input(txs, { it.copy(sharedMerchants = setOf(FinanceAnalysis.merchantOf("MCD Telenor"))) }))
+        assertTrue(s.myBills.isEmpty())
+        assertEquals(1, s.movedToBudget.size)
+        assertTrue(SharedBills.sameMerchant("bs ok el", "ok el"))
+        assertFalse(SharedBills.sameMerchant("bs ok el", "elgiganten"))
+    }
+
+    @Test
+    fun `direct debits are labelled as paid from your account`() {
+        val kommune = (5..10).map { tx(mine, 3055.0, TransactionType.EXPENSE, utc(2026, it, 1), "BS Solrød Kommune", "Housing", "Tax") }
+        val s = SharedBills.status(input(newAccount() + kommune, { it.copy(sharedMerchants = setOf(FinanceAnalysis.merchantOf("BS Solrød Kommune"))) }))
+        assertEquals("your account (PBS)", s.myBills.single().via)
+    }
+
+    @Test
     fun `the partner's name wins over a same-amount payment from your account`() {
         val txs = newAccount() + listOf(
             tx(mine, 20000.0, TransactionType.EXPENSE, utc(2026, 10, 2), "Husleje andel"),
