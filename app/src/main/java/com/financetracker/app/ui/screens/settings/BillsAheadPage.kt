@@ -37,6 +37,7 @@ import com.financetracker.app.util.BillsAhead
 import com.financetracker.app.util.Formatters
 import com.financetracker.app.util.SharedBills
 import com.financetracker.app.util.SharedBillsInput
+import com.financetracker.app.util.UpcomingBill
 import com.financetracker.app.util.advisor.FinanceAnalysis
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -83,20 +84,27 @@ fun BillsAheadPage(accounts: List<Account>) {
     val status = remember(input) { SharedBills.status(input) }
     var includeTicked by remember { mutableStateOf(true) }
     val bills = remember(input, includeTicked) { SharedBills.upcomingBills(input, includeTicked) }
-    // Money in: what you both transfer now, plus your ticked card bills when they're counted as moved here.
-    val plannedIn = status.myToTransfer + status.partnerToTransfer + if (includeTicked) status.myCardThisMonth else 0.0
     var horizon by remember { mutableIntStateOf(3) }
     val partner = setup.partnerName.ifBlank { "Partner" }
+    // Bills paid from the bills account and your own (ticked) shared bills.
     val monthlyBills = remember(bills) { BillsAhead.monthlyAverage(bills) }
+    // All bills combined: plus the partner's own card bills (from next month; this month's are paid).
+    val partnerOwn = status.partnerBills.sumOf { it.monthly }
+    val allList = remember(bills, status) {
+        bills + status.partnerBills.map { UpcomingBill("${it.name} ($partner)", it.monthly, FinanceAnalysis.monthStart(now, 1), 1) }
+    }
+    val allBills = monthlyBills + partnerOwn
+    // Money in: everything you both put towards bills each month (transfers + bills paid by card).
+    val plannedIn = status.myTarget + status.partnerTarget - if (includeTicked) 0.0 else status.myBills.sumOf { it.monthly }
     val paid = remember(input, includeTicked) { SharedBills.paidThisMonth(input, includeTicked) }
     // What still comes in this month: what's left of both transfers.
     val restIn = status.myShortThisMonth + status.partnerShortThisMonth
     var transfersIn by remember(plannedIn) { mutableFloatStateOf(plannedIn.toFloat()) }
-    var billsWhatIf by remember(monthlyBills) { mutableFloatStateOf(monthlyBills.toFloat()) }
+    var billsWhatIf by remember(allBills) { mutableFloatStateOf(allBills.toFloat()) }
     var goalMonths by remember { mutableFloatStateOf(6f) }
 
-    val f = remember(bills, balance, plannedIn, horizon, restIn) {
-        BillsAhead.forecast(bills, balance, plannedIn, now, horizon, firstMonthIn = restIn)
+    val f = remember(allList, balance, plannedIn, horizon, restIn) {
+        BillsAhead.forecast(allList, balance, plannedIn, now, horizon, firstMonthIn = restIn)
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -106,8 +114,6 @@ fun BillsAheadPage(accounts: List<Account>) {
         GlassCard(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Today's balance ${money(balance)} lasts", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                // All shared bills, the same total as Shared bills (incl. the partner's own card bills).
-                val allBills = monthlyBills + status.partnerBills.sumOf { it.monthly }
                 val lasts = BillsAhead.lastsMonths(balance, allBills)
                 Text(
                     if (lasts >= 24) "24+ months" else "${oneDecimal(lasts)} months",
@@ -127,10 +133,8 @@ fun BillsAheadPage(accounts: List<Account>) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Column(Modifier.weight(1f)) {
-                        // Same total as Shared bills: these plus the partner's own card bills.
-                        val partnerOwn = status.partnerBills.sumOf { it.monthly }
                         Text("Our monthly bills", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(money(monthlyBills + partnerOwn), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text(money(allBills), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         Text("expected, yearly ones spread out", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         if (partnerOwn > 0) {
                             Text(
@@ -196,14 +200,14 @@ fun BillsAheadPage(accounts: List<Account>) {
         GlassCard(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("What if…", style = MaterialTheme.typography.titleSmall)
-                AheadLine("You both transfer per month", money(transfersIn.toDouble()))
-                Slider(value = transfersIn, onValueChange = { transfersIn = (it / 250).roundToInt() * 250f }, valueRange = 0f..maxOf(25000f, plannedIn.toFloat() * 2))
+                AheadLine("You both put in per month", money(transfersIn.toDouble()))
+                Slider(value = transfersIn, onValueChange = { transfersIn = (it / 250).roundToInt() * 250f }, valueRange = 0f..maxOf(40000f, plannedIn.toFloat() * 2))
                 Text(
-                    "You ${money(transfersIn * status.myShare)} · $partner ${money(transfersIn * status.partnerShare)} · now ${money(plannedIn)}",
+                    "Transfers + bills paid by card. You ${money(transfersIn * status.myShare)} · $partner ${money(transfersIn * status.partnerShare)} · now ${money(plannedIn)}",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 AheadLine("Bills per month", money(billsWhatIf.toDouble()))
-                Slider(value = billsWhatIf, onValueChange = { billsWhatIf = (it / 250).roundToInt() * 250f }, valueRange = 0f..maxOf(25000f, monthlyBills.toFloat() * 2))
+                Slider(value = billsWhatIf, onValueChange = { billsWhatIf = (it / 250).roundToInt() * 250f }, valueRange = 0f..maxOf(40000f, allBills.toFloat() * 2))
                 val net = transfersIn.toDouble() - billsWhatIf
                 AheadLine("Each month the account", (if (net >= 0) "grows " else "shrinks ") + money(abs(net)), bold = true)
                 Text(
@@ -245,7 +249,8 @@ fun BillsAheadPage(accounts: List<Account>) {
                             } else {
                                 Text("−${money(m.out)}", style = MaterialTheme.typography.bodyMedium)
                                 // Name the big ones (anything other than the usual monthly bills).
-                                val named = m.bills.filter { b -> bills.firstOrNull { it.name == b.first }?.everyMonths != 1 }
+                                // …and big monthly ones like rent.
+                                val named = m.bills.filter { b -> b.second >= 5000 || allList.firstOrNull { it.name == b.first }?.everyMonths != 1 }
                                 Text(
                                     if (named.isEmpty()) "Monthly bills" else named.joinToString(" · ") { "${it.first} ${money(it.second)}" },
                                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -268,7 +273,7 @@ fun BillsAheadPage(accounts: List<Account>) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Rest of this month + next ${horizon - 1}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 AheadLine("Bills still to pay", money(f.totalOut))
-                AheadLine("In the account + transfers to come", money(f.start + f.totalIn))
+                AheadLine("In the account + money put in", money(f.start + f.totalIn))
                 AheadLine(if (f.leftOver >= 0) "Left over" else "Short by", money(abs(f.leftOver)), bold = true)
             }
         }
