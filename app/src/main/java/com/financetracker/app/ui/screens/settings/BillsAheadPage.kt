@@ -124,9 +124,17 @@ fun BillsAheadPage(accounts: List<Account>) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Column(Modifier.weight(1f)) {
+                        // Same total as Shared bills: these plus the partner's own card bills.
+                        val partnerOwn = status.partnerBills.sumOf { it.monthly }
                         Text("Our monthly bills", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(money(monthlyBills), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text(money(monthlyBills + partnerOwn), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         Text("expected, yearly ones spread out", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (partnerOwn > 0) {
+                            Text(
+                                "${money(monthlyBills)} from ${account?.name ?: "the bills account"} and your account · ${money(partnerOwn)} $partner pays directly",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                     Column(Modifier.weight(1f)) {
                         Text("Actually paid in ${aheadMonthLong.format(FinanceAnalysis.monthStart(now))}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
