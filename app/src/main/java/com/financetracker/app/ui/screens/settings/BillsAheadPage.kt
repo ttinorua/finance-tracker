@@ -46,6 +46,7 @@ import kotlin.math.roundToInt
 
 private val aheadMonth = SimpleDateFormat("MMM yy", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
 private val aheadDay = SimpleDateFormat("d MMM", Locale.US)
+private val aheadMonthYear = SimpleDateFormat("MMMM yyyy", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
 private val aheadMonthLong = SimpleDateFormat("MMMM", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
 
 /**
@@ -105,15 +106,17 @@ fun BillsAheadPage(accounts: List<Account>) {
         GlassCard(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Today's balance ${money(balance)} lasts", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                val lasts = BillsAhead.lastsMonths(balance, monthlyBills)
+                // All shared bills, the same total as Shared bills (incl. the partner's own card bills).
+                val allBills = monthlyBills + status.partnerBills.sumOf { it.monthly }
+                val lasts = BillsAhead.lastsMonths(balance, allBills)
                 Text(
                     if (lasts >= 24) "24+ months" else "${oneDecimal(lasts)} months",
                     style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold
                 )
                 Text(
-                    if (monthlyBills <= 0) "No bills found yet for this account."
-                    else "if nothing more came in, at ${money(monthlyBills)} of bills a month" +
-                        if (lasts < 24) ": until about ${aheadMonth.format(FinanceAnalysis.monthStart(now, lasts.toInt()))}" else "",
+                    if (allBills <= 0) "No bills found yet for this account."
+                    else "if nothing more came in, at ${money(allBills)} of shared bills a month" +
+                        if (lasts < 24) ": until about ${aheadMonthYear.format(FinanceAnalysis.monthStart(now, lasts.toInt()))}" else "",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
