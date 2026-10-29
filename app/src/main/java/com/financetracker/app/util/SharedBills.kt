@@ -49,6 +49,9 @@ data class PartnerReport(
     val transfersOut: List<CardPayment>
 )
 
+/** A shared bill paid this month; [fromBudget] = paid from the bills account (else from your own). */
+data class PaidBill(val name: String, val amount: Double, val date: Long, val fromBudget: Boolean)
+
 /** A bill the bills account will pay: [amount] each time, next on [nextDue], every [everyMonths] months. */
 data class UpcomingBill(val name: String, val amount: Double, val nextDue: Long, val everyMonths: Int)
 
@@ -287,6 +290,22 @@ object SharedBills {
                 }
         }
         return result.sortedByDescending { it.amount }
+    }
+
+    /**
+     * The shared bills actually paid this month: everything paid out of the bills account, plus
+     * (with [includeTicked]) your bills ticked as shared paid from your own accounts.
+     */
+    fun paidThisMonth(input: SharedBillsInput, includeTicked: Boolean): List<PaidBill> {
+        val start = FinanceAnalysis.monthStart(input.now)
+        val fromBudget = budgetOutflows(input).filter { it.date >= start }
+            .map { PaidBill(label(FinanceAnalysis.merchantOf(it.note).ifBlank { "Other" }), it.amount, it.date, true) }
+        if (!includeTicked) return fromBudget.sortedBy { it.date }
+        val mine = input.transactions.filter {
+            it.accountId != input.billsAccountId && it.type == TransactionType.EXPENSE && it.date >= start &&
+                FinanceAnalysis.merchantOf(it.note) in input.sharedMerchants
+        }.map { PaidBill(label(FinanceAnalysis.merchantOf(it.note)), it.amount, it.date, false) }
+        return (fromBudget + mine).sortedBy { it.date }
     }
 
     /** One month after [date], moved forward until it's after [now]. */

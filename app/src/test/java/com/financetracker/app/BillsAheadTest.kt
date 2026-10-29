@@ -53,4 +53,22 @@ class BillsAheadTest {
         // July → October → January: next due in the 3-month window is January.
         assertEquals(listOf(0.0, 0.0, 900.0), late.months.map { it.out })
     }
+
+    @Test
+    fun `how long the balance lasts and months to a goal`() {
+        assertEquals(1000.0 + 200.0, BillsAhead.monthlyAverage(listOf(UpcomingBill("A", 1000.0, now, 1), UpcomingBill("B", 2400.0, now, 12))), 0.01)
+        assertEquals(4.0, BillsAhead.lastsMonths(4800.0, 1200.0), 0.01)
+        assertEquals(Double.POSITIVE_INFINITY, BillsAhead.lastsMonths(4800.0, 0.0), 0.0)
+        assertEquals(0, BillsAhead.monthsToGoal(8000.0, 7200.0, 100.0))
+        assertEquals(3, BillsAhead.monthsToGoal(5000.0, 7200.0, 800.0))
+        assertEquals(null, BillsAhead.monthsToGoal(5000.0, 7200.0, 0.0))
+    }
+
+    @Test
+    fun `this month only gets what is left of the transfers`() {
+        val f = BillsAhead.forecast(bills, 20000.0, 9000.0, now, 3, firstMonthIn = 0.0)
+        assertEquals(0.0, f.months[0].moneyIn, 0.01)
+        assertEquals(9000.0, f.months[1].moneyIn, 0.01)
+        assertEquals(18000.0, f.totalIn, 0.01)
+    }
 }

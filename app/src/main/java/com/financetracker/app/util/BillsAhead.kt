@@ -35,6 +35,19 @@ object BillsAhead {
 
     private fun addMonths(time: Long, n: Int): Long = Calendar.getInstance(utc).apply { timeInMillis = time; add(Calendar.MONTH, n) }.timeInMillis
 
+    /** The bills per month on average, quarterly and yearly ones spread out. */
+    fun monthlyAverage(bills: List<UpcomingBill>): Double = bills.sumOf { it.amount / it.everyMonths.coerceAtLeast(1) }
+
+    /** Months [balance] pays for at [monthlyBills] a month with nothing coming in. */
+    fun lastsMonths(balance: Double, monthlyBills: Double): Double = if (monthlyBills <= 0) Double.POSITIVE_INFINITY else (balance / monthlyBills).coerceAtLeast(0.0)
+
+    /** Months until [balance] reaches [goal] when [net] is added each month; 0 = already there, null = never. */
+    fun monthsToGoal(balance: Double, goal: Double, net: Double): Int? = when {
+        balance >= goal -> 0
+        net <= 0 -> null
+        else -> ceil((goal - balance) / net).toInt()
+    }
+
     /**
      * [months] months starting with [now]'s month. [extra] is a what-if bill: an amount in the month
      * at that index (0 = this month).
@@ -46,7 +59,9 @@ object BillsAhead {
         now: Long,
         months: Int,
         buffer: Double = 0.0,
-        extra: Pair<Double, Int>? = null
+        extra: Pair<Double, Int>? = null,
+        /** Money still to come this month (what's left of the transfers); null = a full month's. */
+        firstMonthIn: Double? = null
     ): AheadForecast {
         val rows = mutableListOf<AheadMonth>()
         // Each bill's due dates, starting no earlier than this month.
@@ -75,12 +90,13 @@ object BillsAhead {
             }
             if (extra != null && extra.second == i && extra.first > 0) items += "New bill" to extra.first
             val out = items.sumOf { it.second }
-            bal += monthlyIn - out
+            val moneyIn = if (i == 0 && firstMonthIn != null) firstMonthIn else monthlyIn
+            bal += moneyIn - out
             dry -= out
             if (runway == null && dry < 0) runway = i
             cumOut += out
             needed = maxOf(needed, (buffer + cumOut - balance) / (i + 1))
-            rows += AheadMonth(from, monthlyIn, out, items.sortedByDescending { it.second }, bal)
+            rows += AheadMonth(from, moneyIn, out, items.sortedByDescending { it.second }, bal)
         }
         val lowest = rows.indices.minByOrNull { rows[it].endBalance } ?: 0
         return AheadForecast(
@@ -88,7 +104,7 @@ object BillsAhead {
             lowestIndex = lowest,
             runwayMonths = runway,
             totalOut = cumOut,
-            totalIn = monthlyIn * months,
+            totalIn = rows.sumOf { it.moneyIn },
             start = balance,
             neededPerMonth = ceil(needed.coerceAtLeast(0.0) / 10) * 10
         )

@@ -1,15 +1,10 @@
 package com.financetracker.app.ui.screens.settings
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -27,8 +22,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -44,6 +37,7 @@ import com.financetracker.app.util.BillsAhead
 import com.financetracker.app.util.Formatters
 import com.financetracker.app.util.SharedBills
 import com.financetracker.app.util.SharedBillsInput
+import com.financetracker.app.util.advisor.FinanceAnalysis
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
@@ -51,14 +45,13 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private val aheadMonth = SimpleDateFormat("MMM yy", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
+private val aheadDay = SimpleDateFormat("d MMM", Locale.US)
 private val aheadMonthLong = SimpleDateFormat("MMMM", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
 
 /**
- * Settings > Bills ahead: whether the shared bills account stays covered. Month by month for 3, 6
- * or 12 months: the money coming in (both your transfers) and the bills due on their real dates,
- * the balance after each month, the lowest point, how long today's balance lasts on its own, and
- * what-if sliders (transfers, a new bill, a safety buffer) with the monthly transfer that keeps
- * the account above the buffer.
+ * Settings > Bills ahead for the shared bills account: how long today's balance lasts, the
+ * expected monthly bills next to what was actually paid this month, a goal (bills for N months)
+ * with when you reach it, what-if sliders, and below that the month-by-month list.
  */
 @Composable
 fun BillsAheadPage(accounts: List<Account>) {
@@ -92,52 +85,134 @@ fun BillsAheadPage(accounts: List<Account>) {
     // Money in: what you both transfer now, plus your ticked card bills when they're counted as moved here.
     val plannedIn = status.myToTransfer + status.partnerToTransfer + if (includeTicked) status.myCardThisMonth else 0.0
     var horizon by remember { mutableIntStateOf(3) }
-    var transfersIn by remember(plannedIn) { mutableFloatStateOf(plannedIn.toFloat()) }
-    var extra by remember { mutableFloatStateOf(0f) }
-    var extraMonth by remember { mutableFloatStateOf(4f) }
-    var buffer by remember { mutableFloatStateOf(5000f) }
     val partner = setup.partnerName.ifBlank { "Partner" }
+    val monthlyBills = remember(bills) { BillsAhead.monthlyAverage(bills) }
+    val paid = remember(input, includeTicked) { SharedBills.paidThisMonth(input, includeTicked) }
+    // What still comes in this month: what's left of both transfers.
+    val restIn = status.myShortThisMonth + status.partnerShortThisMonth
+    var transfersIn by remember(plannedIn) { mutableFloatStateOf(plannedIn.toFloat()) }
+    var billsWhatIf by remember(monthlyBills) { mutableFloatStateOf(monthlyBills.toFloat()) }
+    var goalMonths by remember { mutableFloatStateOf(6f) }
 
-    val f = remember(bills, balance, transfersIn, horizon, extra, extraMonth, buffer) {
-        BillsAhead.forecast(bills, balance, transfersIn.toDouble(), now, horizon, buffer.toDouble(), extra.toDouble() to extraMonth.roundToInt())
+    val f = remember(bills, balance, plannedIn, horizon, restIn) {
+        BillsAhead.forecast(bills, balance, plannedIn, now, horizon, firstMonthIn = restIn)
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("${account?.name ?: "Bills account"} · balance today ${money(balance)}", style = MaterialTheme.typography.titleMedium)
+        Text(account?.name ?: "Bills account", style = MaterialTheme.typography.titleMedium)
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            GlassCard(modifier = Modifier.weight(1f)) {
-                Column(Modifier.padding(12.dp)) {
-                    Text("With your transfers", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    val ok = f.lowest.endBalance >= 0
-                    Text(
-                        if (ok) "Covered" else "Short in ${aheadMonthLong.format(f.lowest.start)}",
-                        style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
-                        color = if (ok) palette.positive else MaterialTheme.colorScheme.error
-                    )
-                    Text("Lowest ${money(f.lowest.endBalance)} in ${aheadMonth.format(f.lowest.start)}", style = MaterialTheme.typography.bodySmall)
-                }
+        // How long today's balance lasts.
+        GlassCard(modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Today's balance ${money(balance)} lasts", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val lasts = BillsAhead.lastsMonths(balance, monthlyBills)
+                Text(
+                    if (lasts >= 24) "24+ months" else "${oneDecimal(lasts)} months",
+                    style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold
+                )
+                Text(
+                    if (monthlyBills <= 0) "No bills found yet for this account."
+                    else "if nothing more came in, at ${money(monthlyBills)} of bills a month" +
+                        if (lasts < 24) ": until about ${aheadMonth.format(FinanceAnalysis.monthStart(now, lasts.toInt()))}" else "",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
-            GlassCard(modifier = Modifier.weight(1f)) {
-                Column(Modifier.padding(12.dp)) {
-                    Text("If nothing came in", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    val r = f.runwayMonths
+        }
+
+        // Expected vs actually paid.
+        GlassCard(modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Our monthly bills", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(money(monthlyBills), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text("expected, yearly ones spread out", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text("Actually paid in ${aheadMonthLong.format(FinanceAnalysis.monthStart(now))}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(money(paid.sumOf { it.amount }), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = palette.positive)
+                        Text("real payments this month", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                val later = bills.filter { it.everyMonths > 1 }.sortedBy { it.nextDue }
+                if (paid.isNotEmpty() || later.isNotEmpty()) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                paid.take(10).forEach { p ->
+                    val where = if (p.fromBudget) account?.name ?: "bills account" else "your account"
+                    AheadLine("✓ ${p.name} · $where, ${aheadDay.format(p.date)}", money(p.amount), small = true)
+                }
+                if (paid.size > 10) Text("+ ${paid.size - 10} more", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                later.forEach { b ->
                     Text(
-                        when {
-                            r == null -> "$horizon+ months"
-                            r == 0 -> "Not this month"
-                            else -> "Until end of ${aheadMonthLong.format(f.months[r - 1].start)}"
-                        },
-                        style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold
+                        "○ ${b.name} · next in ${aheadMonth.format(b.nextDue)}, ${money(b.amount / b.everyMonths)}/mo saved",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Text(if (r == null || r == 0) "today's balance" else "$r month${if (r == 1) "" else "s"} of bills", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
 
+        // Goal: bills for N months in the account.
+        GlassCard(modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                val g = goalMonths.roundToInt()
+                val goal = g * billsWhatIf.toDouble()
+                AheadLine("Goal: bills for", "$g month${if (g == 1) "" else "s"} = ${money(goal)}", bold = true)
+                Slider(value = goalMonths, onValueChange = { goalMonths = it.roundToInt().toFloat() }, valueRange = 1f..12f, steps = 10)
+                val net = transfersIn.toDouble() - billsWhatIf
+                val n = BillsAhead.monthsToGoal(balance, goal, net)
+                val (head, sub, color) = when {
+                    n == 0 -> Triple(
+                        "Reached ✓",
+                        "You already have ${oneDecimal(BillsAhead.lastsMonths(balance, billsWhatIf.toDouble()).coerceAtMost(99.0))} months of bills in the account.",
+                        palette.positive
+                    )
+                    n != null -> Triple(
+                        "$n month${if (n == 1) "" else "s"} to go",
+                        "Reached around ${aheadMonth.format(FinanceAnalysis.monthStart(now, n))}, ${money(goal - balance)} still to build up.",
+                        MaterialTheme.colorScheme.primary
+                    )
+                    else -> Triple(
+                        "Not reachable like this",
+                        "More goes out than comes in. Transfer more than ${money(billsWhatIf.toDouble())} a month to start building up.",
+                        MaterialTheme.colorScheme.error
+                    )
+                }
+                Text(head, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = color)
+                Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
+        // What if…
+        GlassCard(modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("What if…", style = MaterialTheme.typography.titleSmall)
+                AheadLine("You both transfer per month", money(transfersIn.toDouble()))
+                Slider(value = transfersIn, onValueChange = { transfersIn = (it / 250).roundToInt() * 250f }, valueRange = 0f..maxOf(25000f, plannedIn.toFloat() * 2))
+                Text(
+                    "You ${money(transfersIn * status.myShare)} · $partner ${money(transfersIn * status.partnerShare)} · now ${money(plannedIn)}",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                AheadLine("Bills per month", money(billsWhatIf.toDouble()))
+                Slider(value = billsWhatIf, onValueChange = { billsWhatIf = (it / 250).roundToInt() * 250f }, valueRange = 0f..maxOf(25000f, monthlyBills.toFloat() * 2))
+                val net = transfersIn.toDouble() - billsWhatIf
+                AheadLine("Each month the account", (if (net >= 0) "grows " else "shrinks ") + money(abs(net)), bold = true)
+                Text(
+                    if (net >= 0) "That builds up your buffer."
+                    else "The balance runs out in about ${oneDecimal(BillsAhead.lastsMonths(balance, -net))} months.",
+                    style = MaterialTheme.typography.bodySmall, color = if (net >= 0) palette.positive else MaterialTheme.colorScheme.error
+                )
+            }
+        }
+
+        // Month by month.
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Look ahead", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+            Text("Month by month", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
             listOf(3, 6, 12).forEach { h -> FilterChip(selected = horizon == h, onClick = { horizon = h }, label = { Text("$h mo") }) }
+        }
+        bills.filter { it.everyMonths > 1 }.minByOrNull { it.nextDue }?.let { b ->
+            Text(
+                "Saving for: ${b.name}, ${money(b.amount)} in ${aheadMonth.format(b.nextDue)}. Part of each transfer goes towards it, so the balance grows until then.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
 
         GlassCard(modifier = Modifier.fillMaxWidth()) {
@@ -147,16 +222,24 @@ fun BillsAheadPage(accounts: List<Account>) {
                     Row(Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.Top) {
                         Column(Modifier.weight(1f)) {
                             Text(aheadMonth.format(m.start), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                            Text("+${money(m.moneyIn)}", style = MaterialTheme.typography.bodySmall, color = palette.positive)
+                            if (i == 0) Text("rest of month", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                if (i == 0 && m.moneyIn <= 0) "Transfers done ✓" else "+${money(m.moneyIn)}",
+                                style = MaterialTheme.typography.bodySmall, color = palette.positive
+                            )
                         }
                         Column(Modifier.weight(1.6f)) {
-                            Text("−${money(m.out)}", style = MaterialTheme.typography.bodyMedium)
-                            // Name the big ones (anything other than the usual monthly bills).
-                            val named = m.bills.filter { b -> bills.firstOrNull { it.name == b.first }?.everyMonths != 1 }
-                            Text(
-                                if (named.isEmpty()) "Monthly bills" else named.joinToString(" · ") { "${it.first} ${money(it.second)}" },
-                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            if (m.out <= 0) {
+                                Text(if (i == 0) "Bills already paid" else "No bills", style = MaterialTheme.typography.bodyMedium)
+                            } else {
+                                Text("−${money(m.out)}", style = MaterialTheme.typography.bodyMedium)
+                                // Name the big ones (anything other than the usual monthly bills).
+                                val named = m.bills.filter { b -> bills.firstOrNull { it.name == b.first }?.everyMonths != 1 }
+                                Text(
+                                    if (named.isEmpty()) "Monthly bills" else named.joinToString(" · ") { "${it.first} ${money(it.second)}" },
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                         Column(Modifier.weight(1.1f), horizontalAlignment = Alignment.End) {
                             Text(
@@ -172,44 +255,10 @@ fun BillsAheadPage(accounts: List<Account>) {
 
         GlassCard(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Next $horizon months", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                AheadLine("Bills to pay", money(f.totalOut))
-                AheadLine("In the account + transfers", money(f.start + f.totalIn))
+                Text("Rest of this month + next ${horizon - 1}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                AheadLine("Bills still to pay", money(f.totalOut))
+                AheadLine("In the account + transfers to come", money(f.start + f.totalIn))
                 AheadLine(if (f.leftOver >= 0) "Left over" else "Short by", money(abs(f.leftOver)), bold = true)
-            }
-        }
-
-        // What if…
-        GlassCard(modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("What if…", style = MaterialTheme.typography.titleSmall)
-                AheadLine("Transfers in per month (both)", money(transfersIn.toDouble()))
-                Slider(value = transfersIn, onValueChange = { transfersIn = (it / 250).roundToInt() * 250f }, valueRange = 0f..maxOf(30000f, plannedIn.toFloat() * 2))
-                Text(
-                    "You ${money(transfersIn * status.myShare)} · $partner ${money(transfersIn * status.partnerShare)} · planned now ${money(plannedIn)}",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                AheadLine("New bill in ${aheadMonthLong.format(f.months.getOrNull(extraMonth.roundToInt())?.start ?: now)}", if (extra == 0f) "none" else money(extra.toDouble()))
-                Slider(value = extra, onValueChange = { extra = (it / 500).roundToInt() * 500f }, valueRange = 0f..20000f)
-                if (extra > 0) {
-                    Slider(value = extraMonth, onValueChange = { extraMonth = it.roundToInt().toFloat() }, valueRange = 0f..(horizon - 1).toFloat(), steps = (horizon - 2).coerceAtLeast(0))
-                }
-                AheadLine("Never go below", money(buffer.toDouble()))
-                Slider(value = buffer, onValueChange = { buffer = (it / 500).roundToInt() * 500f }, valueRange = 0f..20000f)
-                BalanceBars(f.months.map { it.endBalance }, buffer.toDouble(), MaterialTheme.colorScheme.primary, palette.warning, MaterialTheme.colorScheme.error)
-                val safe = f.lowest.endBalance >= buffer
-                Text(
-                    if (safe) "Covered for the next $horizon months"
-                    else if (f.lowest.endBalance < 0) "The account runs dry in ${aheadMonthLong.format(f.lowest.start)}"
-                    else "Dips below your limit in ${aheadMonthLong.format(f.lowest.start)}",
-                    style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold,
-                    color = if (safe) palette.positive else palette.warning
-                )
-                Text(
-                    "To stay above ${money(buffer.toDouble())}: transfer at least ${money(f.neededPerMonth)} a month in total " +
-                        "(you ${money(f.neededPerMonth * status.myShare)}, $partner ${money(f.neededPerMonth * status.partnerShare)}).",
-                    style = MaterialTheme.typography.bodySmall
-                )
             }
         }
 
@@ -231,26 +280,12 @@ fun BillsAheadPage(accounts: List<Account>) {
 }
 
 @Composable
-private fun AheadLine(left: String, right: String, bold: Boolean = false) {
+private fun AheadLine(left: String, right: String, bold: Boolean = false, small: Boolean = false) {
+    val style = if (small) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(left, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, fontWeight = if (bold) FontWeight.Bold else null)
-        Text(right, style = MaterialTheme.typography.bodyMedium, fontWeight = if (bold) FontWeight.Bold else FontWeight.Medium)
+        Text(left, modifier = Modifier.weight(1f), style = style, fontWeight = if (bold) FontWeight.Bold else null)
+        Text(right, style = style, fontWeight = if (bold) FontWeight.Bold else FontWeight.Medium)
     }
 }
 
-/** One bar per month for the end balance: blue fine, orange below the buffer, red below zero. */
-@Composable
-private fun BalanceBars(ends: List<Double>, buffer: Double, ok: Color, low: Color, negative: Color) {
-    val max = (ends.maxOfOrNull { abs(it) } ?: 1.0).coerceAtLeast(1.0)
-    Row(Modifier.fillMaxWidth().height(90.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.Bottom) {
-        ends.forEach { e ->
-            Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.BottomCenter) {
-                Box(
-                    Modifier.fillMaxWidth().fillMaxHeight((abs(e) / max).toFloat().coerceIn(0.04f, 1f))
-                        .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
-                        .background(if (e < 0) negative else if (e < buffer) low else ok)
-                )
-            }
-        }
-    }
-}
+private fun oneDecimal(v: Double): String = String.format(Locale.US, "%.1f", v)
