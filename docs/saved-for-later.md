@@ -56,3 +56,15 @@ Central and can hit HTTP 429 (it did once on 17 Oct; a rerun passed). Point Robo
 mirror too, e.g. `systemProperty("robolectric.dependency.repo.url",
 "https://maven-central.storage-download.googleapis.com/maven2/")` on the unit-test tasks in
 `app/build.gradle.kts`, and check the test still passes on a fresh machine.
+
+## "Closed" switch for an account (parked 30 Oct 2026)
+
+The owner is moving to a new main account and may close the old one at the bank. Instead of
+deleting it (which removes all its transactions) or merging it (meant for the same account
+showing up twice; it would also redirect the old account's bank sync into the new one):
+- A "Closed" switch per account in Settings → Accounts, can be switched back ("Reopen").
+- A closed account is hidden from the account pickers (top selector, alerts, budgets), but its
+  past transactions still show under "All accounts", in Activity, and count in totals, trends
+  and averages.
+- Bank sync skips a closed account. Shared bills, recurring and salary detection keep using its
+  history.
