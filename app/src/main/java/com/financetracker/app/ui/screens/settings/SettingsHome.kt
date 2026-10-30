@@ -65,6 +65,7 @@ import com.financetracker.app.ui.components.AiOrb
 import com.financetracker.app.ui.components.GlassCard
 import com.financetracker.app.ui.theme.LocalAppPalette
 import com.financetracker.app.ui.theme.gradientBrush
+import com.financetracker.app.util.Mortgage
 import com.financetracker.app.util.Formatters
 
 /** The pages Settings opens into. */
@@ -128,7 +129,10 @@ fun SettingsHome(state: SettingsUiState, onOpen: (SettingsPage) -> Unit) {
                 ?: (overallBudgets.size + categoryBudgets.size).takeIf { it > 0 }?.let { plural(it, "budget") }
                 ?: "Not set"
             Tile(Icons.Filled.DonutLarge, "Budgets", budgetLine, Modifier.weight(1f)) { onOpen(SettingsPage.BUDGETS) }
-            Tile(Icons.Filled.Flag, "Loans & goals", "${plural(loans.size, "loan")} · ${plural(goals.size, "goal")}", Modifier.weight(1f)) {
+            val mortgageLine = loans.firstOrNull { it.kind == "mortgage" }?.let { m ->
+                Mortgage.nextPaymentDate(m, System.currentTimeMillis())?.let { "${m.name.ifBlank { "Mortgage" }} · next ${Formatters.date(it)}" }
+            }
+            Tile(Icons.Filled.Flag, "Loans & goals", mortgageLine ?: "${plural(loans.size, "loan")} · ${plural(goals.size, "goal")}", Modifier.weight(1f)) {
                 onOpen(SettingsPage.LOANS_GOALS)
             }
         }
@@ -171,13 +175,6 @@ fun SettingsHome(state: SettingsUiState, onOpen: (SettingsPage) -> Unit) {
                     Icons.Filled.Timeline, "Bills ahead",
                     if (sharedBills.isSetUp) "Is the bills account covered? 3, 6 or 12 months" else "Set up Shared bills first",
                     SettingsPage.BILLS_AHEAD
-                ),
-                Line(
-                    Icons.Filled.House, "Mortgage",
-                    loans.firstOrNull { it.kind == "mortgage" }?.let { m ->
-                        if (m.paymentMerchant.isBlank()) "Links itself at the first payment" else "Debt tracked from its PBS payment"
-                    } ?: "Add it under Loans & goals",
-                    SettingsPage.MORTGAGE
                 ),
                 Line(
                     Icons.Filled.EventRepeat, "Recurring payments",

@@ -102,7 +102,10 @@ data class AttentionInput(
     val sharedBills: SharedBillsStatus? = null,
     val partnerName: String = "",
     /** When the partner's income was last typed in (Shared bills), for the yearly reminder. */
-    val partnerIncomeUpdatedAt: Long? = null
+    val partnerIncomeUpdatedAt: Long? = null,
+    /** The bills account's name and balance as the partner's phone shares it (for a shared loan
+     * when this phone doesn't have that account). */
+    val sharedAccount: Pair<String, Double>? = null
 )
 
 /**
@@ -412,17 +415,18 @@ object AttentionChecks {
 
     /** A week before a planned loan payment: is there enough in the account it's paid from? */
     private fun loanPaymentSoon(input: AttentionInput, loan: Loan): AttentionItem? {
-        val due = Mortgage.nextPaymentDate(loan, input.now)?.takeIf { it - input.now in 0..(7 * DAY) } ?: return null
-        val amount = Mortgage.plannedPayment(loan, input.now) ?: return null
-        val accountId = loan.paidFromAccountId ?: return null
-        val account = input.accounts.firstOrNull { it.id == accountId } ?: return null
-        val balance = input.balances[accountId] ?: return null
+        val (due, amount) = Mortgage.nextPayment(loan, input.now)?.takeIf { it.first - input.now in 0..(7 * DAY) } ?: return null
+        // The account it's paid from on this phone, else (a loan shared from the partner's phone)
+        // the bills account's balance as the partner's phone last shared it.
+        val local = loan.paidFromAccountId?.let { id -> input.accounts.firstOrNull { it.id == id } }
+        val accountName = local?.name ?: input.sharedAccount?.first ?: return null
+        val balance = (local?.let { input.balances[it.id] } ?: input.sharedAccount?.second) ?: return null
         val short = amount - balance
         return AttentionItem(
             "loan-payment:${loan.id}:$due", if (short > 0) AttentionLevel.WARNING else AttentionLevel.INFO,
             "Loan payment ${money(input, amount)} on ${date(due)}",
-            if (short > 0) "${account.name} has ${money(input, balance)}: short by ${money(input, short)}. Move the difference before the payment."
-            else "${account.name} has ${money(input, balance)}: covered ✓",
+            if (short > 0) "$accountName has ${money(input, balance)}: short by ${money(input, short)}. Move the difference before the payment."
+            else "$accountName has ${money(input, balance)}: covered ✓",
             notify = true
         )
     }

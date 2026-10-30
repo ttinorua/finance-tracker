@@ -107,7 +107,17 @@ data class SharedBillsSnapshot(
     val publisherPaidIn: Double,
     val otherPaidIn: Double,
     val publisherBalance: Double,
-    val otherBalance: Double
+    val otherBalance: Double,
+    /** The full screen, so both phones show the same: net incomes, card bills this month and the bill lines. */
+    val publisherIncome: Double = 0.0,
+    val otherIncome: Double = 0.0,
+    val publisherCard: Double = 0.0,
+    val otherCard: Double = 0.0,
+    val payees: List<com.financetracker.app.util.SharedLine> = emptyList(),
+    val publisherBills: List<com.financetracker.app.util.SharedLine> = emptyList(),
+    val otherBills: List<com.financetracker.app.util.SharedLine> = emptyList(),
+    /** Bills ahead as the publishing phone sees it (its owner's side). */
+    val ahead: com.financetracker.app.util.AheadView? = null
 )
 
 /** One phone's shared-bills report: its own side (income, shared card bills, transfers out) and,

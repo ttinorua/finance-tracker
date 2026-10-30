@@ -44,6 +44,7 @@ import com.financetracker.app.FinanceApp
 import com.financetracker.app.data.ai.DeedReader
 import com.financetracker.app.data.ai.LoanDocumentReader
 import com.financetracker.app.data.db.entity.Account
+import com.financetracker.app.data.household.HouseholdSync
 import com.financetracker.app.data.prefs.CurrencySettings
 import com.financetracker.app.data.prefs.Loan
 import com.financetracker.app.data.prefs.LoansAndGoals
@@ -71,7 +72,8 @@ private const val HALF_YEAR = 182L * 24 * 60 * 60 * 1000
  * and the interest after rentefradrag. Loans themselves are added under Loans & goals.
  */
 @Composable
-fun MortgagePage(accounts: List<Account>) {
+fun MortgagePage(accountList: List<AccountUi>) {
+    val accounts = accountList.map { it.account }
     val loans by LoansAndGoals.loans.collectAsState()
     val mortgages = loans.filter { it.kind == "mortgage" }
     if (mortgages.isEmpty()) {
@@ -81,7 +83,7 @@ fun MortgagePage(accounts: List<Account>) {
         )
         return
     }
-    var pickedId by remember { mutableStateOf(mortgages.first().id) }
+    var pickedId by remember { mutableStateOf(MortgageNav.loanId ?: mortgages.first().id) }
     val loan = mortgages.firstOrNull { it.id == pickedId } ?: mortgages.first()
 
     val context = LocalContext.current
@@ -97,10 +99,16 @@ fun MortgagePage(accounts: List<Account>) {
     val status = remember(loan, transactions) { Mortgage.status(loan, transactions, now) }
     val recurring = remember(transactions) { FinanceAnalysis.recurringPayments(transactions, now) }
     val payments = remember(loan, transactions) { Mortgage.payments(loan, transactions) }
-    val paidFromShared = shared.accountId != null && payments.lastOrNull()?.accountId == shared.accountId
-    val myShare = remember(transactions, shared) {
-        SharedBills.myShare(SharedBills.averageNetSalary(transactions, now), shared.partnerNetIncome)
+    val household by HouseholdSync.state.collectAsState()
+    // Paid from the shared bills account (on this phone, or shared from the partner's phone).
+    val paidFromShared = (shared.accountId != null && (loan.paidFromAccountId == shared.accountId || payments.lastOrNull()?.accountId == shared.accountId)) ||
+        loan.sharedBy.isNotBlank()
+    // Your share of the bills: from the split on this phone, else as the partner's phone shares it.
+    val myShare = remember(transactions, shared, household.partnerSharedBills) {
+        if (shared.isSetUp) SharedBills.myShare(SharedBills.averageNetSalary(transactions, now), shared.partnerNetIncome)
+        else household.partnerSharedBills?.snapshot?.let { 1 - it.publisherShare } ?: 0.5
     }
+    val otherName = shared.partnerName.ifBlank { loan.sharedBy.ifBlank { "your partner" } }
     var message by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
 
@@ -111,8 +119,9 @@ fun MortgagePage(accounts: List<Account>) {
     val period = Mortgage.periodMonths(loan)
     val perTerm = if (period == 3) "quarter" else if (period == 1) "month" else "payment"
     val paidFromName = accounts.firstOrNull { it.id == loan.paidFromAccountId }?.name ?: payments.lastOrNull()?.accountName
-    val nextDue = Mortgage.nextPaymentDate(loan, now)
-    val nextAmount = payments.lastOrNull()?.amount ?: Mortgage.plannedPayment(loan, now)
+    val next = Mortgage.nextPayment(loan, now)
+    val nextDue = next?.first
+    val nextAmount = next?.second ?: payments.lastOrNull()?.amount
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (mortgages.size > 1) {
@@ -121,14 +130,30 @@ fun MortgagePage(accounts: List<Account>) {
             }
         }
 
-        // Short title; the full description behind Details.
+        // Short title; the full description behind Details; Edit opens the loan's details.
         var details by remember { mutableStateOf(false) }
+        var editing by remember { mutableStateOf(false) }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 listOf(shortLender(loan.lender), shortType(loan.loanType)).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { loan.name.ifBlank { "Mortgage" } },
                 style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f)
             )
             TextButton(onClick = { details = !details }) { Text(if (details) "Hide" else "Details") }
+            OutlinedButton(onClick = { editing = true }) { Text("Edit") }
+        }
+        if (editing) {
+            LoanDialog(
+                loan = loan, accounts = accountList, isNew = false,
+                onSave = { saveEditedLoan(loans, it); editing = false },
+                onDelete = { LoansAndGoals.deleteLoan(loan.id); editing = false },
+                onDismiss = { editing = false }
+            )
+        }
+        if (loan.sharedBy.isNotBlank()) {
+            Text(
+                "Shared by ${loan.sharedBy}" + (loan.updatedAt?.let { " · updated ${Formatters.syncTimestamp(it)}" } ?: "") + " · you can edit it too",
+                style = MaterialTheme.typography.bodySmall, color = palette.positive
+            )
         }
         if (details) {
             Text(
@@ -204,6 +229,20 @@ fun MortgagePage(accounts: List<Account>) {
             }
         }
 
+        // Your part of it, by the bills split.
+        if (paidFromShared && nextAmount != null) {
+            Card {
+                Text("Your part", style = MaterialTheme.typography.titleSmall)
+                LineRow("Of the next payment (${(myShare * 100).roundToInt()}%)", "≈ " + money(nextAmount * myShare), bold = true)
+                if (status.monthlyPayment > 0) LineRow("Per month, in your transfer", "≈ " + money(status.monthlyPayment * myShare))
+                Text(
+                    "From the bills split by income. $otherName's part: ${((1 - myShare) * 100).roundToInt()}%." +
+                        (loan.ownershipSharePct?.let { " You own ${it.roundToInt()}% of the home." } ?: ""),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
         // This year's payments.
         Card {
             Text(if (status.year.paid > 0) "Paid this year · ${money(status.year.paid)}" else "Paid this year", style = MaterialTheme.typography.titleSmall)
@@ -246,7 +285,7 @@ fun MortgagePage(accounts: List<Account>) {
                 if (paidFromShared) {
                     Text(
                         "Paid from the shared bills account: your ${(myShare * 100).roundToInt()}% is +${money(extra * myShare)}, " +
-                            "${shared.partnerName.ifBlank { "your partner" }}'s is +${money(extra * (1 - myShare))}.",
+                            "$otherName's is +${money(extra * (1 - myShare))}.",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -343,6 +382,11 @@ private fun RateRow(label: String, perTerm: String, perMonth: String, header: Bo
         Text(perTerm, style = style, color = c, fontWeight = if (header) null else FontWeight.SemiBold, modifier = Modifier.weight(1.2f), textAlign = TextAlign.End)
         Text(perMonth, style = style, color = c, modifier = Modifier.weight(1.1f), textAlign = TextAlign.End)
     }
+}
+
+/** Which mortgage to open, when Loans & goals sends you here. */
+object MortgageNav {
+    var loanId by mutableStateOf<String?>(null)
 }
 
 /** Friværdi from the home value the person typed in, and their ownership share if set. */

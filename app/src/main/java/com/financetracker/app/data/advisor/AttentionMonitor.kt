@@ -221,7 +221,9 @@ object AttentionMonitor {
             fixedMerchants = FixedMerchants.merchants.value,
             sharedBills = sharedStatus,
             partnerName = shared.partnerName,
-            partnerIncomeUpdatedAt = shared.partnerIncomeUpdatedAt
+            partnerIncomeUpdatedAt = shared.partnerIncomeUpdatedAt,
+            // A shared loan paid from the partner's bills account: its balance as their phone shares it.
+            sharedAccount = HouseholdSync.state.value.partnerSharedBills?.snapshot?.ahead?.let { it.accountName to it.balance }
         )
     }
 

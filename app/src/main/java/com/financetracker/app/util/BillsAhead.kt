@@ -25,6 +25,42 @@ data class AheadForecast(
 }
 
 /**
+ * What the Bills ahead screen shows, worked out on the phone with the bills account, or as that
+ * phone shared it with the partner's phone through the household.
+ */
+data class AheadView(
+    val accountName: String,
+    val balance: Double,
+    /** Bills paid from the account plus the ticked ones paid from the other person's own account. */
+    val bills: List<UpcomingBill>,
+    /** The other owner's own card bills (all monthly). */
+    val ownCardBills: List<SharedLine>,
+    /** Everything both put towards the bills per month (transfers + card bills). */
+    val plannedIn: Double,
+    /** Transfers still to come this month. */
+    val restIn: Double,
+    /** This phone's owner's share of the bills. */
+    val myShare: Double,
+    val paid: List<PaidBill>,
+    val planned: List<PlannedBill>,
+    /** The other owner's name. */
+    val otherName: String,
+    /** Set on the partner's phone: who shared it and when. */
+    val sharedBy: String? = null,
+    val updatedAt: Long? = null,
+    /** Text for bills paid from the bills-account owner's own accounts ("your account" / "Tino's account"). */
+    val ownAccountLabel: String = "your account",
+    /** Text for [ownCardBills] ("Kjestine pays directly" / "you pay directly"). */
+    val cardBillsLabel: String = "$otherName pays directly"
+) {
+    val monthlyBills: Double get() = BillsAhead.monthlyAverage(bills)
+    val cardBillsMonthly: Double get() = ownCardBills.sumOf { it.monthly }
+    val allBills: Double get() = monthlyBills + cardBillsMonthly
+    fun allList(now: Long): List<UpcomingBill> =
+        bills + ownCardBills.map { UpcomingBill(it.name, it.monthly, FinanceAnalysis.monthStart(now, 1), 1) }
+}
+
+/**
  * "Bills ahead" for the shared bills account: month by month, the money coming in (your combined
  * transfers) and the bills due on their real dates (a yearly insurance in its month, not spread out),
  * so you can see whether the account stays covered, when it's lowest, how long today's balance
@@ -50,11 +86,11 @@ object BillsAhead {
 
     /**
      * How far along the saving for [bill] is: months of it set aside so far (this month counted)
-     * out of [PlannedBill.everyMonths], and the amount that stands for.
+     * out of the months its next payment covers, and the amount that stands for.
      */
     fun setAside(bill: PlannedBill, now: Long): Pair<Int, Double> {
         val monthsToGo = Mortgage.monthsBetween(FinanceAnalysis.monthStart(now), FinanceAnalysis.monthStart(bill.nextDue))
-        val done = (bill.everyMonths - monthsToGo).coerceIn(0, bill.everyMonths)
+        val done = (bill.nextCovers - monthsToGo).coerceIn(0, bill.nextCovers)
         return done to bill.monthly * done
     }
 
@@ -93,7 +129,7 @@ object BillsAhead {
             for (b in bills) {
                 var d = due.getValue(b)
                 while (d < to) {
-                    if (d >= from) items += b.name to b.amount
+                    if (d >= from) items += b.name to (if (d == b.nextDue) b.firstAmount ?: b.amount else b.amount)
                     d = addMonths(d, b.everyMonths.coerceAtLeast(1))
                 }
                 due[b] = d

@@ -48,12 +48,23 @@ data class Loan(
     val ownershipSharePct: Double? = null,
     /** Payments a year: 12 monthly, 4 quarterly (Danish mortgages), 2, 1; null = not said (monthly). */
     val paymentsPerYear: Int? = null,
-    /** What one payment costs (ydelse per termin), before tax. */
+    /** Older builds: one payment's amount. Now [monthlyPayment] is the cost per month and each
+     * payment is the months it covers times that; kept only to read old data. */
     val paymentAmount: Double? = null,
     /** The first (or next) payment date, YYYY-MM-DD; later ones follow every 12 / [paymentsPerYear] months. */
     val firstPaymentDate: String = "",
     /** The account the loan is paid from (the shared bills account plans for it then). */
-    val paidFromAccountId: Long? = null
+    val paidFromAccountId: Long? = null,
+    /** When the loan was paid out (YYYY-MM-DD): the first payment covers the months since then. */
+    val payoutDate: String = "",
+    /** The first payment's exact amount, when the payment overview gives it. */
+    val firstPaymentAmount: Double? = null,
+    /** Shared with the household: the other phone sees and can edit the same loan. */
+    val sharedWithHousehold: Boolean = false,
+    /** Who shared it, when it came from the partner's phone ("" = added here). */
+    val sharedBy: String = "",
+    /** When it was last changed (the newer copy wins between the two phones). */
+    val updatedAt: Long? = null
 )
 
 data class SavingsGoal(
@@ -89,8 +100,10 @@ object LoansAndGoals {
         _goals.value = runCatching { parseGoals(prefs.getString(KEY_GOALS, null)) }.getOrDefault(emptyList())
     }
 
-    fun saveLoan(loan: Loan) {
-        _loans.value = _loans.value.filterNot { it.id == loan.id } + loan
+    /** Saves [loan]; [touch] marks it changed now (a copy from the partner's phone keeps its time). */
+    fun saveLoan(loan: Loan, touch: Boolean = true) {
+        val saved = if (touch) loan.copy(updatedAt = System.currentTimeMillis()) else loan
+        _loans.value = _loans.value.map { if (it.id == loan.id) saved else it }.let { list -> if (list.any { it.id == loan.id }) list else list + saved }
         prefs.edit().putString(KEY_LOANS, JSONArray(_loans.value.map(::loanToJson)).toString()).apply()
     }
 
@@ -135,6 +148,8 @@ object LoansAndGoals {
         .putOpt("ownership_share_pct", loan.ownershipSharePct)
         .putOpt("payments_per_year", loan.paymentsPerYear).putOpt("payment_amount", loan.paymentAmount)
         .put("first_payment_date", loan.firstPaymentDate).putOpt("paid_from_account_id", loan.paidFromAccountId)
+        .put("payout_date", loan.payoutDate).putOpt("first_payment_amount", loan.firstPaymentAmount)
+        .put("shared_with_household", loan.sharedWithHousehold).put("shared_by", loan.sharedBy).putOpt("updated_at", loan.updatedAt)
 
     /** Reads a loan from JSON — the app's own format, or what the document reader returns. */
     fun loanFromJson(json: JSONObject, id: String = json.optString("id").ifBlank { UUID.randomUUID().toString() }): Loan {
@@ -157,7 +172,12 @@ object LoansAndGoals {
             paymentsPerYear = num("payments_per_year")?.toInt()?.takeIf { it in 1..12 },
             paymentAmount = num("payment_amount"),
             firstPaymentDate = text("first_payment_date"),
-            paidFromAccountId = num("paid_from_account_id")?.toLong()
+            paidFromAccountId = num("paid_from_account_id")?.toLong(),
+            payoutDate = text("payout_date"),
+            firstPaymentAmount = num("first_payment_amount"),
+            sharedWithHousehold = json.optBoolean("shared_with_household", false),
+            sharedBy = text("shared_by"),
+            updatedAt = num("updated_at")?.toLong()
         )
     }
 

@@ -53,13 +53,31 @@ data class PartnerReport(
 data class PaidBill(val name: String, val amount: Double, val date: Long, val fromBudget: Boolean)
 
 /** A bill the bills account will pay: [amount] each time, next on [nextDue], every [everyMonths] months. */
-data class UpcomingBill(val name: String, val amount: Double, val nextDue: Long, val everyMonths: Int)
+data class UpcomingBill(
+    val name: String,
+    val amount: Double,
+    val nextDue: Long,
+    val everyMonths: Int,
+    /** What the payment on [nextDue] costs when it differs (a loan's short first payment). */
+    val firstAmount: Double? = null
+)
 
 /** A recurring bill on your own accounts that could be shared (ticked in Shared bills). */
 data class SharedCandidate(val merchant: String, val monthly: Double, val label: String, val accountName: String?)
 
 /** A bill known before it's been paid (a quarterly loan): one payment, how far apart, when next. */
-data class PlannedBill(val name: String, val merchant: String, val amount: Double, val everyMonths: Int, val nextDue: Long) {
+data class PlannedBill(
+    val name: String,
+    val merchant: String,
+    /** A full payment. */
+    val amount: Double,
+    val everyMonths: Int,
+    val nextDue: Long,
+    /** What the payment on [nextDue] costs (smaller when it's a short first one). */
+    val nextAmount: Double = amount,
+    /** Months the payment on [nextDue] covers. */
+    val nextCovers: Int = everyMonths
+) {
     val monthly: Double get() = amount / everyMonths.coerceAtLeast(1)
 }
 
@@ -204,7 +222,7 @@ object SharedBills {
 
     private fun plannedVia(p: PlannedBill): String {
         val every = when (p.everyMonths) { 1 -> "every month"; 3 -> "every quarter"; 6 -> "every half year"; 12 -> "every year"; else -> "every ${p.everyMonths} months" }
-        return "${Formatters.amount(p.amount)} $every · next ${SimpleDateFormat("d MMM", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(p.nextDue)}"
+        return "${Formatters.amount(p.amount)} $every · ${Formatters.amount(p.nextAmount)} next ${SimpleDateFormat("d MMM", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(p.nextDue)}"
     }
 
     private fun label(merchant: String) = merchant.split(' ').joinToString(" ") { w -> w.replaceFirstChar { it.uppercase() } }
@@ -306,7 +324,7 @@ object SharedBills {
                         ?: UpcomingBill(label(c.merchant), c.monthly, oneMonthAfter(now, now), 1)
                 }
         }
-        result += input.planned.map { UpcomingBill(it.name, it.amount, it.nextDue, it.everyMonths) }
+        result += input.planned.map { UpcomingBill(it.name, it.amount, it.nextDue, it.everyMonths, it.nextAmount.takeIf { a -> a != it.amount }) }
         return result.sortedByDescending { it.amount }
     }
 
@@ -331,6 +349,25 @@ object SharedBills {
         var d = nextAfter(date, FinanceAnalysis.Cadence.MONTHLY)
         while (d < FinanceAnalysis.monthStart(now)) d = nextAfter(d, FinanceAnalysis.Cadence.MONTHLY)
         return d
+    }
+
+    /** Everything the Bills ahead screen needs, worked out on the phone with the bills account. */
+    fun aheadView(input: SharedBillsInput, accountName: String, includeTicked: Boolean): AheadView {
+        val status = status(input)
+        val partner = input.partnerName.ifBlank { "Partner" }
+        return AheadView(
+            accountName = accountName,
+            balance = input.balance,
+            bills = upcomingBills(input, includeTicked),
+            ownCardBills = status.partnerBills.map { it.copy(name = "${it.name} ($partner)") },
+            // Everything you both put towards bills each month (transfers + bills paid by card).
+            plannedIn = status.myTarget + status.partnerTarget - if (includeTicked) 0.0 else status.myBills.sumOf { it.monthly },
+            restIn = status.myShortThisMonth + status.partnerShortThisMonth,
+            myShare = status.myShare,
+            paid = paidThisMonth(input, includeTicked),
+            planned = input.planned,
+            otherName = partner
+        )
     }
 
     fun status(input: SharedBillsInput): SharedBillsStatus {

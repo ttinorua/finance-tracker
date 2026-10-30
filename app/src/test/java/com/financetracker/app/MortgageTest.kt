@@ -124,4 +124,22 @@ class MortgageTest {
         val status = Mortgage.status(loan.copy(homeValue = 3_400_000.0), emptyList(), utc(2026, 10, 20))
         assertEquals(1_250_000.0, Mortgage.equity(loan.copy(homeValue = 3_400_000.0), status)!!, 0.01)
     }
+
+    @Test
+    fun `the first payment covers only the months since the payout`() {
+        val loan = quarterly.copy(monthlyPayment = 19_590.0, payoutDate = "2026-10-30")
+        val now = utc(2026, 11, 2)
+        assertEquals(2, Mortgage.monthsCovered(loan, utc(2026, 12, 31)))
+        assertEquals(3, Mortgage.monthsCovered(loan, utc(2027, 3, 31)))
+        assertEquals(utc(2026, 12, 31) to 39_180.0, Mortgage.nextPayment(loan, now))
+        assertEquals(58_770.0, Mortgage.paymentOn(loan, utc(2027, 3, 31), now)!!, 0.01)
+        // The exact first amount from the payment overview wins.
+        assertEquals(39_412.0, Mortgage.paymentOn(loan.copy(firstPaymentAmount = 39_412.0), utc(2026, 12, 31), now)!!, 0.01)
+        // Planned for the bills account: 19,590 a month, the short first payment next.
+        val planned = Mortgage.plannedBills(listOf(loan), 9L, now).single()
+        assertEquals(19_590.0, planned.monthly, 0.01)
+        assertEquals(39_180.0, planned.nextAmount, 0.01)
+        assertEquals(2, planned.nextCovers)
+        assertEquals(1 to 19_590.0, com.financetracker.app.util.BillsAhead.setAside(planned, now))
+    }
 }

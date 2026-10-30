@@ -67,20 +67,42 @@ object Mortgage {
     }
 
     /**
-     * What the loan costs per month before any payment has been seen: one payment spread over the
-     * months it covers, else the monthly payment, else worked out from the debt and the end date.
+     * What the loan costs per month (what to set aside): the cost per month given, else an older
+     * build's per-payment amount spread out, else worked out from the debt and the end date.
      */
     fun plannedMonthly(loan: Loan, now: Long): Double? {
-        loan.paymentAmount?.takeIf { it > 0 }?.let { return it / periodMonths(loan) }
         loan.monthlyPayment?.takeIf { it > 0 }?.let { return it }
+        loan.paymentAmount?.takeIf { it > 0 }?.let { return it / periodMonths(loan) }
         val debt = loan.remainingDebt ?: return null
         val end = endDateOf(loan) ?: return null
         val months = monthsBetween(now, end).takeIf { it > 0 } ?: return null
         return paymentFor(debt, interestRateOf(loan), months) + debt * contributionRateOf(loan) / 12
     }
 
-    /** One payment as planned (a quarterly one is three months' worth). */
+    /** A full payment (a quarterly one is three months' worth). */
     fun plannedPayment(loan: Loan, now: Long): Double? = plannedMonthly(loan, now)?.times(periodMonths(loan))
+
+    /** Months the payment on [due] covers: the first one only the months since the payout, the rest a full period. */
+    fun monthsCovered(loan: Loan, due: Long): Int {
+        val period = periodMonths(loan)
+        val first = AttentionChecks.parseDate(loan.firstPaymentDate) ?: return period
+        val payout = AttentionChecks.parseDate(loan.payoutDate) ?: return period
+        if (Math.abs(due - first) > DAY) return period
+        return monthsBetween(payout, first).coerceIn(1, period)
+    }
+
+    /** What the payment on [due] costs: the months it covers times the cost per month (the first one's exact amount when given). */
+    fun paymentOn(loan: Loan, due: Long, now: Long): Double? {
+        val first = AttentionChecks.parseDate(loan.firstPaymentDate)
+        if (first != null && Math.abs(due - first) <= DAY) loan.firstPaymentAmount?.takeIf { it > 0 }?.let { return it }
+        return plannedMonthly(loan, now)?.times(monthsCovered(loan, due))
+    }
+
+    /** The next payment on or after today and its amount. */
+    fun nextPayment(loan: Loan, now: Long): Pair<Long, Double>? {
+        val due = nextPaymentDate(loan, now) ?: return null
+        return paymentOn(loan, due, now)?.let { due to it }
+    }
 
     /** The next payment date on or after today, from the first payment date and the rhythm. */
     fun nextPaymentDate(loan: Loan, now: Long): Long? {
@@ -98,19 +120,22 @@ object Mortgage {
     }
 
     /**
-     * Loans paid from [accountId] that the shared bills should plan for: one payment, how many
-     * months apart, and the next due date (next month when no date is known yet).
+     * Loans paid from [accountId] that the shared bills should plan for: the cost per month, a full
+     * payment, the next due date (next month when no date is known yet) and what that one costs.
      */
     fun plannedBills(loans: List<Loan>, accountId: Long?, now: Long): List<PlannedBill> =
         if (accountId == null) emptyList()
         else loans.filter { it.paidFromAccountId == accountId }.mapNotNull { loan ->
-            val amount = plannedPayment(loan, now)?.takeIf { it > 0 } ?: return@mapNotNull null
+            val full = plannedPayment(loan, now)?.takeIf { it > 0 } ?: return@mapNotNull null
+            val next = nextPayment(loan, now)
             PlannedBill(
                 name = loan.name.ifBlank { "Mortgage" },
                 merchant = loan.paymentMerchant,
-                amount = amount,
+                amount = full,
                 everyMonths = periodMonths(loan),
-                nextDue = nextPaymentDate(loan, now) ?: FinanceAnalysis.monthStart(now, 1)
+                nextDue = next?.first ?: FinanceAnalysis.monthStart(now, 1),
+                nextAmount = next?.second ?: full,
+                nextCovers = next?.first?.let { monthsCovered(loan, it) } ?: periodMonths(loan)
             )
         }
 
@@ -126,6 +151,7 @@ object Mortgage {
             ?: recurring.firstOrNull { p -> LENDER_WORDS.any { it in p.merchant } }
     }
 
+
     /**
      * The loan's first payment once it arrives, to link it by itself: a payment from the account the
      * loan is paid from, to a lender, near the planned amount (within a third), from 3 weeks before
@@ -133,8 +159,11 @@ object Mortgage {
      */
     fun findFirstPayment(loan: Loan, transactions: List<TransactionWithDetails>, now: Long): String? {
         if (loan.paymentMerchant.isNotBlank()) return null
-        val planned = plannedPayment(loan, now) ?: return null
-        val from = AttentionChecks.parseDate(loan.firstPaymentDate)?.minus(21 * DAY) ?: loan.debtAsOf ?: return null
+        // A loan shared from the partner's phone without the account here: that phone links it.
+        if (loan.paidFromAccountId == null && loan.sharedBy.isNotBlank()) return null
+        val firstDate = AttentionChecks.parseDate(loan.firstPaymentDate)
+        val planned = (firstDate?.let { paymentOn(loan, it, now) } ?: plannedPayment(loan, now)) ?: return null
+        val from = firstDate?.minus(21 * DAY) ?: loan.debtAsOf ?: return null
         val lender = loan.lender.lowercase().split(Regex("[^a-zæøå0-9]+")).filter { it.length >= 4 && it != "bank" }
         return transactions.firstOrNull { tx ->
             tx.type == TransactionType.EXPENSE && tx.date >= from &&
@@ -164,7 +193,7 @@ object Mortgage {
         var prev: Long? = null
         for (p in all) {
             val months = prev?.let { ((p.date - it) / (30.44 * DAY)).roundToInt().coerceIn(1, 12) }
-                ?: if (loan.paymentsPerYear != null) periodMonths(loan) else guessMonths(all)
+                ?: if (loan.paymentsPerYear != null) monthsCovered(loan, p.date) else guessMonths(all)
             val base = if (p.date > asOf) running else (loan.remainingDebt ?: 0.0)
             val i = base * ((loan.interestRatePct ?: 0.0) / 100) / 12 * months
             val c = base * contribution / 12 * months
@@ -177,9 +206,10 @@ object Mortgage {
         }
 
         val period = if (loan.paymentsPerYear != null) periodMonths(loan) else guessMonths(all)
+        // The cost per month as given until there are two payments (the first may be a short one).
         val monthly = when {
-            all.isNotEmpty() -> all.last().amount / period
-            else -> plannedMonthly(loan, now) ?: 0.0
+            all.size >= 2 -> all.last().amount / period
+            else -> plannedMonthly(loan, now) ?: all.lastOrNull()?.let { it.amount / monthsCovered(loan, it.date) } ?: 0.0
         }
         val debt = running
         // The loan's own end date when known; else worked out: the annuity is on the interest

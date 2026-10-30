@@ -137,7 +137,9 @@ fun SettingsScreen(
     val anticipateRecurringBills by BudgetSettings.anticipateRecurringBills.collectAsState()
     val fixedExpenseCategoryIds by FixedExpenseCategories.fixedCategoryIds.collectAsState()
     var page by rememberSaveable { mutableStateOf<SettingsPage?>(null) }
-    BackHandler(enabled = page != null) { page = null }
+    // The mortgage page sits under Loans & goals.
+    fun back() { page = if (page == SettingsPage.MORTGAGE) SettingsPage.LOANS_GOALS else null }
+    BackHandler(enabled = page != null) { back() }
 
     var showAddAccount by remember { mutableStateOf(false) }
     var showAddCategory by remember { mutableStateOf(false) }
@@ -156,7 +158,7 @@ fun SettingsScreen(
                 title = { Text(page?.title ?: "Settings") },
                 navigationIcon = {
                     if (page != null) {
-                        IconButton(onClick = { page = null }) {
+                        IconButton(onClick = { back() }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         }
                     }
@@ -516,11 +518,11 @@ fun SettingsScreen(
                     if (page == SettingsPage.AI) AiAssistantSettings()
 
 
-                    if (page == SettingsPage.LOANS_GOALS) LoansAndGoalsSettings(accounts = state.accounts)
+                    if (page == SettingsPage.LOANS_GOALS) LoansAndGoalsSettings(accounts = state.accounts, onOpenMortgage = { MortgageNav.loanId = it; page = SettingsPage.MORTGAGE })
                     if (page == SettingsPage.RECURRING) RecurringSettings()
                     if (page == SettingsPage.SHARED_BILLS) SharedBillsPage(state.accounts.map { it.account })
                     if (page == SettingsPage.BILLS_AHEAD) BillsAheadPage(state.accounts.map { it.account })
-                    if (page == SettingsPage.MORTGAGE) MortgagePage(state.accounts.map { it.account })
+                    if (page == SettingsPage.MORTGAGE) MortgagePage(state.accounts)
 
                     if (page == SettingsPage.ATTENTION) AttentionSettings()
 

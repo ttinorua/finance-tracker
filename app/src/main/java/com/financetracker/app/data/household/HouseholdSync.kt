@@ -10,6 +10,10 @@ import com.financetracker.app.data.prefs.FixedMerchants
 import com.financetracker.app.data.prefs.LoansAndGoals
 import com.financetracker.app.data.prefs.SharedBillsSettings
 import com.financetracker.app.data.repository.FinanceRepository
+import com.financetracker.app.util.PlannedBill
+import com.financetracker.app.util.PaidBill
+import com.financetracker.app.util.UpcomingBill
+import com.financetracker.app.util.AheadView
 import com.financetracker.app.util.CardPayment
 import com.financetracker.app.util.Mortgage
 import com.financetracker.app.util.PartnerReport
@@ -88,6 +92,7 @@ object HouseholdSync {
     private const val PREFS = "household_prefs"
     private const val INVITE_HOURS = 48L
     private const val SHARED_SUFFIX = "_sharedbills"
+    private const val LOANS_SUFFIX = "_loans"
 
     private lateinit var prefs: SharedPreferences
     private lateinit var repository: FinanceRepository
@@ -141,8 +146,9 @@ object HouseholdSync {
                 repository.observeTransactions(),
                 state.map { listOf(it.householdId, it.lines.map { l -> l.mainCategory }.sorted(), it.includedAccountIds, it.shareDetails) }
                     .distinctUntilChanged(),
-                SharedBillsSettings.setup
-            ) { _, _, _ -> Unit }
+                SharedBillsSettings.setup,
+                LoansAndGoals.loans
+            ) { _, _, _, _ -> Unit }
                 .debounce(2_000)
                 .collect { runCatching { publish() }.onFailure { Log.w(TAG, "publish", it) } }
         }
@@ -370,7 +376,14 @@ object HouseholdSync {
         }
         listeners += ref.collection("spending").addSnapshotListener { snap, e ->
             if (e != null || snap == null) return@addSnapshotListener
-            val (shared, spending) = snap.documents.partition { it.id.endsWith(SHARED_SUFFIX) }
+            val (loanDocs, rest) = snap.documents.partition { it.id.endsWith(LOANS_SUFFIX) }
+            val (shared, spending) = rest.partition { it.id.endsWith(SHARED_SUFFIX) }
+            val me = _state.value.myUid
+            loanDocs.filter { it.id.removeSuffix(LOANS_SUFFIX) != me }.forEach { doc ->
+                val from = _state.value.memberName(doc.id.removeSuffix(LOANS_SUFFIX))
+                runCatching { HouseholdCrypto.decryptText(householdKey, doc.getString("data").orEmpty()) }.getOrNull()
+                    ?.let { text -> scope.launch { runCatching { importLoans(text, from) }.onFailure { Log.w(TAG, "loans", it) } } }
+            }
             val reports = spending.mapNotNull { doc -> runCatching { readReport(householdKey, doc.id, doc.getString("data").orEmpty(), doc.getLong("updatedAt") ?: 0L) }.getOrNull() }
             val sharedReports = shared.mapNotNull { doc ->
                 runCatching { readSharedBills(householdKey, doc.id.removeSuffix(SHARED_SUFFIX), doc.getString("data").orEmpty(), doc.getLong("updatedAt") ?: 0L) }.getOrNull()
@@ -434,6 +447,53 @@ object HouseholdSync {
             published[docId] = text.hashCode()
         }
         publishSharedBills(id, householdKey, uid, now)
+        publishLoans(id, householdKey, uid, now)
+    }
+
+    /**
+     * Shares the loans marked "Shared with household" with the partner's phone, as "<uid>_loans" in
+     * the same "spending" collection (the existing rules let only you write it). Encrypted. The
+     * account it's paid from goes by name, and your ownership share as yours.
+     */
+    private suspend fun publishLoans(householdId: String, householdKey: ByteArray, uid: String, now: Long) {
+        val doc = firestore().collection("households").document(householdId).collection("spending").document(uid + LOANS_SUFFIX)
+        val accounts = repository.getAccounts()
+        val shared = LoansAndGoals.loans.value.filter { it.sharedWithHousehold }
+        val text = JSONArray().apply {
+            shared.forEach { loan ->
+                put(LoansAndGoals.loanToJson(loan).put("paid_from_name", accounts.firstOrNull { it.id == loan.paidFromAccountId }?.name ?: JSONObject.NULL))
+            }
+        }.toString()
+        if (published[doc.id] == text.hashCode()) return
+        if (shared.isEmpty()) doc.delete().await()
+        else doc.set(mapOf("data" to HouseholdCrypto.encryptText(householdKey, text), "updatedAt" to now)).await()
+        published[doc.id] = text.hashCode()
+    }
+
+    /**
+     * The partner's shared loans: a loan that's new here, or changed there more recently, is saved
+     * here as it is there, with the ownership share turned round and the account matched by name.
+     */
+    private suspend fun importLoans(text: String, from: String) {
+        val accounts = repository.getAccounts()
+        val array = JSONArray(text)
+        for (i in 0 until array.length()) {
+            val json = array.getJSONObject(i)
+            val theirs = LoansAndGoals.loanFromJson(json)
+            val local = LoansAndGoals.loans.value.firstOrNull { it.id == theirs.id }
+            if (local != null && (local.updatedAt ?: 0L) >= (theirs.updatedAt ?: 0L)) continue
+            val paidFromName = json.optString("paid_from_name").takeIf { it.isNotBlank() && !json.isNull("paid_from_name") }
+            LoansAndGoals.saveLoan(
+                theirs.copy(
+                    ownershipSharePct = theirs.ownershipSharePct?.let { 100 - it },
+                    paidFromAccountId = accounts.firstOrNull { it.name == paidFromName }?.id ?: local?.paidFromAccountId,
+                    sharedWithHousehold = true,
+                    sharedBy = if (local?.sharedBy == "" && local.updatedAt != null) "" else from,
+                    homeValueUpdatedAt = theirs.homeValueUpdatedAt
+                ),
+                touch = false
+            )
+        }
     }
 
     /**
@@ -469,11 +529,21 @@ object HouseholdSync {
                     Mortgage.plannedBills(LoansAndGoals.loans.value, account.id, now)
                 )
             )
+            val aheadInput = SharedBillsInput(
+                account.id, transactions, repository.getAccountBalance(account), side.netIncome, setup.partnerNetIncome,
+                setup.partnerName, setup.answers, setup.sharedMerchants, FixedMerchants.merchants.value, setup.partnerBills,
+                setup.lockedMySharePct, setup.startedAt, setup.history, partner, now,
+                Mortgage.plannedBills(LoansAndGoals.loans.value, account.id, now)
+            )
             json.put("status", JSONObject()
                 .put("account", account.name).put("month", monthKey(now)).put("share", status.myShare).put("bills", status.monthlyBills)
                 .put("t", status.myTarget).put("ot", status.partnerTarget).put("tr", status.myToTransfer).put("otr", status.partnerToTransfer)
                 .put("in", status.myPaidInThisMonth).put("oin", status.partnerPaidInThisMonth)
-                .put("bal", status.myBalance).put("obal", status.partnerBalance))
+                .put("bal", status.myBalance).put("obal", status.partnerBalance)
+                .put("inc", status.myIncome).put("oinc", status.partnerIncome)
+                .put("card", status.myCardThisMonth).put("ocard", status.partnerCardThisMonth)
+                .put("payees", sharedLines(status.budgetPayees)).put("mine", sharedLines(status.myBills)).put("theirs", sharedLines(status.partnerBills))
+                .put("ahead", aheadToJson(SharedBills.aheadView(aheadInput, account.name, includeTicked = true))))
         }
         val text = json.toString()
         if (published[doc.id] == text.hashCode()) return
@@ -496,10 +566,43 @@ object HouseholdSync {
             SharedBillsSnapshot(
                 o.optString("account"), o.optString("month"), o.optDouble("share"), o.optDouble("bills"),
                 o.optDouble("t"), o.optDouble("ot"), o.optDouble("tr"), o.optDouble("otr"),
-                o.optDouble("in"), o.optDouble("oin"), o.optDouble("bal"), o.optDouble("obal")
+                o.optDouble("in"), o.optDouble("oin"), o.optDouble("bal"), o.optDouble("obal"),
+                publisherIncome = o.optDouble("inc", 0.0), otherIncome = o.optDouble("oinc", 0.0),
+                publisherCard = o.optDouble("card", 0.0), otherCard = o.optDouble("ocard", 0.0),
+                payees = readLines(o.optJSONArray("payees")), publisherBills = readLines(o.optJSONArray("mine")),
+                otherBills = readLines(o.optJSONArray("theirs")),
+                ahead = o.optJSONObject("ahead")?.let { runCatching { aheadFromJson(it) }.getOrNull() }
             )
         }
         return SharedBillsMemberReport(uid, side, snapshot, updatedAt)
+    }
+
+    private fun sharedLines(lines: List<SharedLine>) = JSONArray().apply { lines.forEach { put(JSONArray().put(it.name).put(it.monthly).put(it.via)) } }
+
+    private fun readLines(a: JSONArray?): List<SharedLine> =
+        a?.let { (0 until it.length()).map { i -> it.getJSONArray(i).let { l -> SharedLine(l.getString(0), l.getDouble(1), l.optString(2)) } } }.orEmpty()
+
+    private fun aheadToJson(v: AheadView): JSONObject = JSONObject()
+        .put("account", v.accountName).put("balance", v.balance).put("in", v.plannedIn).put("rest", v.restIn).put("share", v.myShare)
+        .put("other", v.otherName)
+        .put("bills", JSONArray().apply { v.bills.forEach { put(JSONArray().put(it.name).put(it.amount).put(it.nextDue).put(it.everyMonths).put(it.firstAmount ?: JSONObject.NULL)) } })
+        .put("card", sharedLines(v.ownCardBills))
+        .put("paid", JSONArray().apply { v.paid.forEach { put(JSONArray().put(it.name).put(it.amount).put(it.date).put(it.fromBudget)) } })
+        .put("planned", JSONArray().apply {
+            v.planned.forEach { put(JSONArray().put(it.name).put(it.merchant).put(it.amount).put(it.everyMonths).put(it.nextDue).put(it.nextAmount).put(it.nextCovers)) }
+        })
+
+    private fun aheadFromJson(o: JSONObject): AheadView {
+        fun rows(key: String) = o.optJSONArray(key)?.let { a -> (0 until a.length()).map { a.getJSONArray(it) } }.orEmpty()
+        return AheadView(
+            accountName = o.optString("account"), balance = o.optDouble("balance", 0.0),
+            bills = rows("bills").map { UpcomingBill(it.getString(0), it.getDouble(1), it.getLong(2), it.getInt(3), if (it.isNull(4)) null else it.getDouble(4)) },
+            ownCardBills = readLines(o.optJSONArray("card")),
+            plannedIn = o.optDouble("in", 0.0), restIn = o.optDouble("rest", 0.0), myShare = o.optDouble("share", 0.5),
+            paid = rows("paid").map { PaidBill(it.getString(0), it.getDouble(1), it.getLong(2), it.getBoolean(3)) },
+            planned = rows("planned").map { PlannedBill(it.getString(0), it.getString(1), it.getDouble(2), it.getInt(3), it.getLong(4), it.getDouble(5), it.getInt(6)) },
+            otherName = o.optString("other")
+        )
     }
 
     private fun readReport(householdKey: ByteArray, docId: String, sealed: String, updatedAt: Long): MemberReport {

@@ -71,4 +71,11 @@ class BillsAheadTest {
         assertEquals(9000.0, f.months[1].moneyIn, 0.01)
         assertEquals(18000.0, f.totalIn, 0.01)
     }
+
+    @Test
+    fun `a short first payment is used once, then the full amount`() {
+        val loan = UpcomingBill("Mortgage", 58_770.0, utc(2026, 12, 31), 3, firstAmount = 39_180.0)
+        val f = BillsAhead.forecast(listOf(loan), 0.0, 0.0, utc(2026, 11, 2), 6)
+        assertEquals(listOf(0.0, 39_180.0, 0.0, 0.0, 58_770.0, 0.0), f.months.map { it.out })
+    }
 }

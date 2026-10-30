@@ -35,6 +35,7 @@ import com.financetracker.app.data.prefs.LoansAndGoals
 import com.financetracker.app.data.prefs.SharedBillsSettings
 import com.financetracker.app.ui.components.GlassCard
 import com.financetracker.app.ui.theme.LocalAppPalette
+import com.financetracker.app.util.AheadView
 import com.financetracker.app.util.BillsAhead
 import com.financetracker.app.util.Formatters
 import com.financetracker.app.util.Mortgage
@@ -61,48 +62,61 @@ private val aheadMonthLong = SimpleDateFormat("MMMM", Locale.US).apply { timeZon
 @Composable
 fun BillsAheadPage(accounts: List<Account>) {
     val setup by SharedBillsSettings.setup.collectAsState()
+    val household by HouseholdSync.state.collectAsState()
     if (!setup.isSetUp) {
-        Text("Set up Shared bills first (pick the bills account). Bills ahead looks at that account.", style = MaterialTheme.typography.bodyMedium)
+        // No bills account on this phone: show the partner's phone's view, when shared.
+        val shared = household.partnerSharedBills
+        val view = shared?.snapshot?.ahead?.let { a ->
+            val by = household.memberName(shared.uid)
+            // Seen from this phone: the shares swap, and the card bills are this phone's owner's.
+            a.copy(
+                myShare = 1 - a.myShare, otherName = by, sharedBy = by, updatedAt = shared.updatedAt,
+                ownAccountLabel = "$by's account", cardBillsLabel = "you pay directly",
+                ownCardBills = a.ownCardBills.map { it.copy(name = it.name.substringBeforeLast(" (")) }
+            )
+        }
+        if (view != null) AheadContent(view, includeTicked = true, onIncludeTicked = null)
+        else Text("Set up Shared bills first (pick the bills account). Bills ahead looks at that account.", style = MaterialTheme.typography.bodyMedium)
         return
     }
     val repository = (LocalContext.current.applicationContext as FinanceApp).repository
     val transactions by remember { repository.observeTransactions() }.collectAsState(initial = emptyList())
     val fixedMerchants by FixedMerchants.merchants.collectAsState()
-    val household by HouseholdSync.state.collectAsState()
-    val currency by CurrencySettings.currencyCode.collectAsState()
     val account = accounts.firstOrNull { it.id == setup.accountId }
     var balance by remember { mutableStateOf(0.0) }
     LaunchedEffect(account, transactions) { balance = account?.let { repository.getAccountBalance(it) } ?: 0.0 }
     val now = remember { System.currentTimeMillis() }
-    fun money(v: Double) = Formatters.currency(v, currency)
-    val palette = LocalAppPalette.current
-
     val loans by LoansAndGoals.loans.collectAsState()
-    val input = remember(transactions, setup, balance, fixedMerchants, household.partnerSharedBills, loans) {
-        SharedBillsInput(
+    var includeTicked by remember { mutableStateOf(true) }
+    val view = remember(transactions, setup, balance, fixedMerchants, household.partnerSharedBills, loans, includeTicked, account) {
+        val input = SharedBillsInput(
             setup.accountId!!, transactions, balance, SharedBills.averageNetSalary(transactions, now), setup.partnerNetIncome,
             setup.partnerName, setup.answers, setup.sharedMerchants, fixedMerchants, setup.partnerBills, setup.lockedMySharePct,
             setup.startedAt, setup.history, household.partnerSharedBills?.side, now, Mortgage.plannedBills(loans, setup.accountId, now)
         )
+        SharedBills.aheadView(input, account?.name ?: "Bills account", includeTicked)
     }
-    val status = remember(input) { SharedBills.status(input) }
-    var includeTicked by remember { mutableStateOf(true) }
-    val bills = remember(input, includeTicked) { SharedBills.upcomingBills(input, includeTicked) }
+    AheadContent(view, includeTicked, onIncludeTicked = { includeTicked = it })
+}
+
+/** The Bills ahead screen for [view]; [onIncludeTicked] null = shared from the partner's phone (view only). */
+@Composable
+private fun AheadContent(view: AheadView, includeTicked: Boolean, onIncludeTicked: ((Boolean) -> Unit)?) {
+    val currency by CurrencySettings.currencyCode.collectAsState()
+    val now = remember { System.currentTimeMillis() }
+    fun money(v: Double) = Formatters.currency(v, currency)
+    val palette = LocalAppPalette.current
+    val balance = view.balance
+    val bills = view.bills
+    val partner = view.otherName
+    val monthlyBills = view.monthlyBills
+    val partnerOwn = view.cardBillsMonthly
+    val allList = remember(view) { view.allList(now) }
+    val allBills = view.allBills
+    val plannedIn = view.plannedIn
+    val paid = view.paid
+    val restIn = view.restIn
     var horizon by remember { mutableIntStateOf(3) }
-    val partner = setup.partnerName.ifBlank { "Partner" }
-    // Bills paid from the bills account and your own (ticked) shared bills.
-    val monthlyBills = remember(bills) { BillsAhead.monthlyAverage(bills) }
-    // All bills combined: plus the partner's own card bills (from next month; this month's are paid).
-    val partnerOwn = status.partnerBills.sumOf { it.monthly }
-    val allList = remember(bills, status) {
-        bills + status.partnerBills.map { UpcomingBill("${it.name} ($partner)", it.monthly, FinanceAnalysis.monthStart(now, 1), 1) }
-    }
-    val allBills = monthlyBills + partnerOwn
-    // Money in: everything you both put towards bills each month (transfers + bills paid by card).
-    val plannedIn = status.myTarget + status.partnerTarget - if (includeTicked) 0.0 else status.myBills.sumOf { it.monthly }
-    val paid = remember(input, includeTicked) { SharedBills.paidThisMonth(input, includeTicked) }
-    // What still comes in this month: what's left of both transfers.
-    val restIn = status.myShortThisMonth + status.partnerShortThisMonth
     var transfersIn by remember(plannedIn) { mutableFloatStateOf(plannedIn.toFloat()) }
     var billsWhatIf by remember(allBills) { mutableFloatStateOf(allBills.toFloat()) }
     var goalMonths by remember { mutableFloatStateOf(6f) }
@@ -112,7 +126,13 @@ fun BillsAheadPage(accounts: List<Account>) {
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(account?.name ?: "Bills account", style = MaterialTheme.typography.titleMedium)
+        Text(view.accountName, style = MaterialTheme.typography.titleMedium)
+        view.sharedBy?.let { by ->
+            Text(
+                "From $by's phone" + (view.updatedAt?.let { " · updated ${Formatters.syncTimestamp(it)}" } ?: "") + " · view only",
+                style = MaterialTheme.typography.bodySmall, color = palette.positive
+            )
+        }
 
         // How long today's balance lasts.
         GlassCard(modifier = Modifier.fillMaxWidth()) {
@@ -142,7 +162,7 @@ fun BillsAheadPage(accounts: List<Account>) {
                         Text("expected, yearly ones spread out", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         if (partnerOwn > 0) {
                             Text(
-                                "${money(monthlyBills)} from ${account?.name ?: "the bills account"} and your account · ${money(partnerOwn)} $partner pays directly",
+                                "${money(monthlyBills)} from ${view.accountName} and ${view.ownAccountLabel} · ${money(partnerOwn)} ${view.cardBillsLabel}",
                                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -156,7 +176,7 @@ fun BillsAheadPage(accounts: List<Account>) {
                 val later = bills.filter { it.everyMonths > 1 }.sortedBy { it.nextDue }
                 if (paid.isNotEmpty() || later.isNotEmpty()) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 paid.take(10).forEach { p ->
-                    val where = if (p.fromBudget) account?.name ?: "bills account" else "your account"
+                    val where = if (p.fromBudget) view.accountName else view.ownAccountLabel
                     AheadLine("✓ ${p.name} · $where, ${aheadDay.format(p.date)}", money(p.amount), small = true)
                 }
                 if (paid.size > 10) Text("+ ${paid.size - 10} more", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -207,7 +227,7 @@ fun BillsAheadPage(accounts: List<Account>) {
                 AheadLine("You both put in per month", money(transfersIn.toDouble()))
                 Slider(value = transfersIn, onValueChange = { transfersIn = (it / 250).roundToInt() * 250f }, valueRange = 0f..maxOf(40000f, plannedIn.toFloat() * 2))
                 Text(
-                    "Transfers + bills paid by card. You ${money(transfersIn * status.myShare)} · $partner ${money(transfersIn * status.partnerShare)} · now ${money(plannedIn)}",
+                    "Transfers + bills paid by card. You ${money(transfersIn * view.myShare)} · $partner ${money(transfersIn * (1 - view.myShare))} · now ${money(plannedIn)}",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 AheadLine("Bills per month", money(billsWhatIf.toDouble()))
@@ -227,7 +247,7 @@ fun BillsAheadPage(accounts: List<Account>) {
             Text("Month by month", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
             listOf(3, 6, 12).forEach { h -> FilterChip(selected = horizon == h, onClick = { horizon = h }, label = { Text("$h mo") }) }
         }
-        val nextPlanned = input.planned.minByOrNull { it.nextDue }
+        val nextPlanned = view.planned.minByOrNull { it.nextDue }
         if (nextPlanned != null) {
             val (done, amount) = BillsAhead.setAside(nextPlanned, now)
             GlassCard(modifier = Modifier.fillMaxWidth()) {
@@ -300,15 +320,15 @@ fun BillsAheadPage(accounts: List<Account>) {
             }
         }
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        if (onIncludeTicked != null) Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Count my shared bills as moved here", style = MaterialTheme.typography.bodyMedium)
                 Text(
-                    "Your bills ticked as shared but still paid from your own account, as if already paid from ${account?.name ?: "the bills account"}.",
+                    "Your bills ticked as shared but still paid from your own account, as if already paid from ${view.accountName}.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Switch(checked = includeTicked, onCheckedChange = { includeTicked = it })
+            Switch(checked = includeTicked, onCheckedChange = onIncludeTicked)
         }
         Text(
             "Bills and dates come from what the account pays: ones that repeat keep their rhythm (a yearly bill in its month), the rest count as monthly.",

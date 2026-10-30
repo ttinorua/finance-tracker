@@ -64,7 +64,7 @@ import kotlinx.coroutines.launch
 /** Settings > General > My loans & goals: what the AI advisor knows about the user's loans and
  * savings goals. A loan can be typed in or read from its (Danish) document by the AI. */
 @Composable
-fun LoansAndGoalsSettings(accounts: List<AccountUi>, modifier: Modifier = Modifier) {
+fun LoansAndGoalsSettings(accounts: List<AccountUi>, modifier: Modifier = Modifier, onOpenMortgage: (String) -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val loans by LoansAndGoals.loans.collectAsState()
@@ -103,9 +103,14 @@ fun LoansAndGoalsSettings(accounts: List<AccountUi>, modifier: Modifier = Modifi
                 detail = listOfNotNull(
                     loan.remainingDebt?.let { "Debt ${Formatters.currency(it, currency)}" },
                     loan.interestRatePct?.let { "$it%" + (loan.contributionRatePct?.let { c -> " + $c%" } ?: "") },
-                    loan.monthlyPayment?.let { "${Formatters.currency(it, currency)}/month" }
+                    loan.monthlyPayment?.let { "${Formatters.currency(it, currency)}/month" },
+                    Mortgage.nextPayment(loan, System.currentTimeMillis())?.let { (due, amount) ->
+                        "next ${Formatters.date(due)} ≈ ${Formatters.currency(amount, currency)}"
+                    },
+                    loan.sharedBy.takeIf { it.isNotBlank() }?.let { "shared by $it" } ?: if (loan.sharedWithHousehold) "shared" else null
                 ).joinToString(" · ").ifBlank { loan.lender },
-                onClick = { editingLoan = loan }
+                // A mortgage opens its page (with Edit there); other loans open the editor.
+                onClick = { if (loan.kind == "mortgage") onOpenMortgage(loan.id) else editingLoan = loan }
             )
         }
         goals.forEach { goal ->
@@ -176,10 +181,7 @@ fun LoansAndGoalsSettings(accounts: List<AccountUi>, modifier: Modifier = Modifi
             accounts = accounts,
             isNew = loans.none { it.id == loan.id },
             onSave = {
-                // A newly typed debt is the new exact figure the mortgage estimate starts from.
-                val previous = loans.firstOrNull { l -> l.id == it.id }
-                val debtChanged = previous == null || previous.remainingDebt != it.remainingDebt
-                LoansAndGoals.saveLoan(if (debtChanged && it.remainingDebt != null) it.copy(debtAsOf = System.currentTimeMillis()) else it)
+                saveEditedLoan(loans, it)
                 editingLoan = null
             },
             onDelete = {
@@ -224,8 +226,15 @@ private fun ItemRow(title: String, detail: String, onClick: () -> Unit) {
 
 private val LOAN_KINDS = listOf("mortgage" to "Mortgage", "bank_loan" to "Bank loan", "car_loan" to "Car loan", "student_loan" to "Student loan", "other" to "Other")
 
+/** Saves a loan from the editor: a newly typed debt is the new exact figure the mortgage estimate starts from. */
+internal fun saveEditedLoan(loans: List<Loan>, loan: Loan) {
+    val previous = loans.firstOrNull { it.id == loan.id }
+    val debtChanged = previous == null || previous.remainingDebt != loan.remainingDebt
+    LoansAndGoals.saveLoan(if (debtChanged && loan.remainingDebt != null) loan.copy(debtAsOf = System.currentTimeMillis()) else loan)
+}
+
 @Composable
-private fun LoanDialog(loan: Loan, accounts: List<AccountUi>, isNew: Boolean, onSave: (Loan) -> Unit, onDelete: () -> Unit, onDismiss: () -> Unit) {
+internal fun LoanDialog(loan: Loan, accounts: List<AccountUi>, isNew: Boolean, onSave: (Loan) -> Unit, onDelete: () -> Unit, onDismiss: () -> Unit) {
     // A new mortgage is paid from the shared bills account, when there is one.
     var draft by remember(loan.id) {
         mutableStateOf(
@@ -282,18 +291,27 @@ private fun LoanDialog(loan: Loan, accounts: List<AccountUi>, isNew: Boolean, on
                         )
                     }
                 }
-                if ((draft.paymentsPerYear ?: 12) == 12) {
-                    NumberField("Monthly payment", draft.monthlyPayment) { draft = draft.copy(monthlyPayment = it) }
-                } else {
-                    NumberField("Amount per payment (ydelse per termin)", draft.paymentAmount) { draft = draft.copy(paymentAmount = it) }
-                    draft.paymentAmount?.takeIf { it > 0 }?.let { amount ->
-                        Text(
-                            "${Formatters.currency(amount / Mortgage.periodMonths(draft), currency)} a month to set aside",
-                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary
-                        )
-                    }
+                NumberField("Cost per month (what to set aside)", draft.monthlyPayment ?: draft.paymentAmount?.div(Mortgage.periodMonths(draft))) {
+                    draft = draft.copy(monthlyPayment = it, paymentAmount = null)
                 }
+                Field("Paid out (YYYY-MM-DD)", draft.payoutDate) { draft = draft.copy(payoutDate = it) }
                 Field("First payment (YYYY-MM-DD)", draft.firstPaymentDate) { draft = draft.copy(firstPaymentDate = it) }
+                if (Mortgage.periodMonths(draft) > 1) {
+                    NumberField("First payment amount (optional, from the payment overview)", draft.firstPaymentAmount) { draft = draft.copy(firstPaymentAmount = it) }
+                }
+                // What the payments come to: the first covers the months since the payout.
+                val now = remember { System.currentTimeMillis() }
+                val firstDue = com.financetracker.app.util.advisor.AttentionChecks.parseDate(draft.firstPaymentDate)
+                val monthly = Mortgage.plannedMonthly(draft, now)
+                if (firstDue != null && monthly != null && monthly > 0) {
+                    val firstMonths = Mortgage.monthsCovered(draft, firstDue)
+                    val period = Mortgage.periodMonths(draft)
+                    Text(
+                        "First payment covers $firstMonths month${if (firstMonths == 1) "" else "s"}: ≈ ${Formatters.currency(Mortgage.paymentOn(draft, firstDue, now) ?: 0.0, currency)}" +
+                            if (period > 1) ". Then every $period months: ≈ ${Formatters.currency(monthly * period, currency)}" else "",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary
+                    )
+                }
                 Text("Paid from", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 4.dp))
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
@@ -307,6 +325,20 @@ private fun LoanDialog(loan: Loan, accounts: List<AccountUi>, isNew: Boolean, on
                             label = { Text(account.account.name) }
                         )
                     }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Shared with household", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            if (draft.sharedBy.isNotBlank()) "Shared by ${draft.sharedBy}. Changes show on both phones."
+                            else "Your partner's phone sees and can edit the same loan.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(checked = draft.sharedWithHousehold, onCheckedChange = { draft = draft.copy(sharedWithHousehold = it) })
+                }
+                if (draft.sharedWithHousehold) {
+                    NumberField("You own (%, from the title deed / skøde)", draft.ownershipSharePct) { draft = draft.copy(ownershipSharePct = it?.coerceIn(0.0, 100.0)) }
                 }
                 NumberField("Years left", draft.yearsLeft) { draft = draft.copy(yearsLeft = it) }
                 Field("Rate type (fixed / variable)", draft.rateType) { draft = draft.copy(rateType = it) }

@@ -29,8 +29,9 @@ object LoanDocumentReader {
         - "contribution_rate_pct": the mortgage contribution rate (bidragssats) in % a year (number)
         - "monthly_payment": the payment per month (number); if payments are quarterly, divide by 3
         - "payments_per_year": how many payments a year (number: 12 monthly, 4 quarterly, 2, 1); Danish mortgages are usually 4 (terminer)
-        - "payment_amount": what one payment costs before tax (ydelse per termin, number)
         - "first_payment_date": the first payment date (første betaling / første termin), YYYY-MM-DD
+        - "payout_date": when the loan is paid out (udbetaling), YYYY-MM-DD
+        - "first_payment_amount": the first payment's amount if the document gives it (number)
         - "years_left": number of years left (number)
         - "end_date": when the loan ends (YYYY-MM-DD if known)
         - "interest_only_until": end of any interest-only period (afdragsfrihed)
