@@ -69,7 +69,7 @@ showing up twice; it would also redirect the old account's bank sync into the ne
 - Bank sync skips a closed account. Shared bills, recurring and salary detection keep using its
   history.
 
-## Quarterly loan payment: plan for it before it's paid (final, parked 31 Oct 2026)
+## Quarterly loan payment: plan for it before it's paid (built 30 Oct 2026, with the tidier Mortgage page)
 
 Mock-up: https://claude.ai/artifact/1J4H114aKGngWRwoenwpAb (3 screens). The owner's mortgage
 (tilpasningslån, variable rate, 4 payments a year, paid by PBS from SJF Budget, paid out
