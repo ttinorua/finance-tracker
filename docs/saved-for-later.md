@@ -68,3 +68,25 @@ showing up twice; it would also redirect the old account's bank sync into the ne
   and averages.
 - Bank sync skips a closed account. Shared bills, recurring and salary detection keep using its
   history.
+
+## Quarterly loan payment: plan for it before it's paid (final, parked 31 Oct 2026)
+
+Mock-up: https://claude.ai/artifact/1J4H114aKGngWRwoenwpAb (3 screens). The owner's mortgage
+(tilpasningslån, variable rate, 4 payments a year, paid by PBS from SJF Budget, paid out
+30 Oct 2026, refinancing 30 Jun 2031) is paid every quarter. Today the app only knows a bill
+after it has repeated, so it would plan without the loan for months. Agreed design:
+1. **Loans & goals → Mortgage:** "How often is it paid?" (Monthly / Quarterly / Half-year /
+   Yearly), "Amount per payment" (ydelse per termin), "First payment" date, then "every 3
+   months: …". Filled from the loan document where possible. Shows "X kr a month to set
+   aside". Paid from: the bills account. The first PBS payment links itself to the loan and
+   the real amount replaces the planned one.
+2. **Shared bills:** the loan shows in section 1 as "Mortgage · planned", the amount spread
+   per month (quarterly / 3), from day one, so both transfers go up before the first payment.
+   Never counted twice once real payments arrive.
+3. **Bills ahead:** a reminder about a week before each payment ("Loan payment X kr on 1 Jan ·
+   SJF Budget has Y kr: covered ✓", or short by Z); a "Saving for" bar (set aside so far, n of
+   3 months); the full payment in its month in the month list (balance climbs two months, then
+   drops). A payment month that would go below 0 turns red and the reminder says how much to add.
+Also: when the rent (Balder Green Hills, in Kjestine's card bills) stops, it's unticked.
+Mortgage page uses the quarterly payments for debt and debt-free date. Bank's ISIN/bond list
+is not needed.
