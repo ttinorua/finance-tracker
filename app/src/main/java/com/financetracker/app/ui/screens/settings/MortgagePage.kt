@@ -1,9 +1,11 @@
 package com.financetracker.app.ui.screens.settings
 
+import com.financetracker.app.util.advisor.AttentionChecks
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.runtime.LaunchedEffect
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,9 +36,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -105,126 +104,140 @@ fun MortgagePage(accounts: List<Account>) {
     var message by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
 
+    // Link the first payment by itself when it arrives.
+    LaunchedEffect(loan, transactions) {
+        Mortgage.findFirstPayment(loan, transactions, now)?.let { LoansAndGoals.saveLoan(loan.copy(paymentMerchant = it, debtAsOf = loan.debtAsOf ?: now)) }
+    }
+    val period = Mortgage.periodMonths(loan)
+    val perTerm = if (period == 3) "quarter" else if (period == 1) "month" else "payment"
+    val paidFromName = accounts.firstOrNull { it.id == loan.paidFromAccountId }?.name ?: payments.lastOrNull()?.accountName
+    val nextDue = Mortgage.nextPaymentDate(loan, now)
+    val nextAmount = payments.lastOrNull()?.amount ?: Mortgage.plannedPayment(loan, now)
+
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (mortgages.size > 1) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 mortgages.forEach { m -> FilterChip(selected = m.id == loan.id, onClick = { pickedId = m.id }, label = { Text(m.name.ifBlank { "Mortgage" }) }) }
             }
         }
-        Text(
-            listOf(loan.name.ifBlank { "Mortgage" }, loan.lender, loan.loanType).filter { it.isNotBlank() }.joinToString(" · "),
-            style = MaterialTheme.typography.titleMedium
-        )
 
-        // Debt left and debt-free date.
-        Card {
-            Text("Debt left", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(money(status.debt), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            status.paidOffFraction(loan.originalAmount)?.let { f ->
-                Bar(f.toFloat())
-                Text("${(f * 100).roundToInt()}% paid of ${money(loan.originalAmount!!)}", style = MaterialTheme.typography.bodySmall)
-            }
-            status.monthsLeft?.let { Text("Debt-free ${monthYear.format(Mortgage.dateAfter(now, it))}", fontWeight = FontWeight.SemiBold) }
+        // Short title; the full description behind Details.
+        var details by remember { mutableStateOf(false) }
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                if (loan.paymentMerchant.isBlank()) "Link the payment below so the debt goes down by itself."
-                else "Estimated after each payment since ${loan.debtAsOf?.let { dayMonthYear.format(it) } ?: "linking"}.",
+                listOf(shortLender(loan.lender), shortType(loan.loanType)).filter { it.isNotBlank() }.joinToString(" · ").ifBlank { loan.name.ifBlank { "Mortgage" } },
+                style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = { details = !details }) { Text(if (details) "Hide" else "Details") }
+        }
+        if (details) {
+            Text(
+                listOf(loan.name, loan.lender, loan.loanType, loan.summary).filter { it.isNotBlank() }.joinToString("\n\n"),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
 
-        // The PBS payment.
+        // Summary: debt left, next payment, debt-free.
         Card {
+            Text("Debt left", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(money(status.debt), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            status.paidOffFraction(loan.originalAmount)?.takeIf { it >= 0.005 }?.let { f ->
+                Bar(f.toFloat())
+                Text("${(f * 100).roundToInt()}% paid of ${money(loan.originalAmount!!)}", style = MaterialTheme.typography.bodySmall)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 4.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text("Next payment", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(nextAmount?.let { "≈ " + money(it) } ?: "Not set", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(
+                        listOfNotNull(nextDue?.let { dayMonthYear.format(it) }, paidFromName).joinToString(" · ").ifBlank { "Set it under Loans & goals" },
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Column(Modifier.weight(1f)) {
+                    Text("Debt-free", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(status.monthsLeft?.let { monthYear.format(Mortgage.dateAfter(now, it)) } ?: "-", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(
+                        if (Mortgage.endDateOf(loan) != null) "from the loan" else "estimated",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            if (status.monthlyPayment > 0) {
+                Text(
+                    (if (period == 1) "Every month" else "Every $perTerm · ≈ ${money(status.monthlyPayment)} a month to set aside"),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // The PBS payment: links by itself; picking by hand is tucked away.
+            var picking by remember { mutableStateOf(false) }
             if (loan.paymentMerchant.isBlank()) {
-                Text("Link the PBS payment", style = MaterialTheme.typography.titleSmall)
-                val suggested = Mortgage.suggestPayment(loan, recurring)
-                val options = (listOfNotNull(suggested) + recurring.filter { it != suggested }).take(5)
-                if (options.isEmpty()) Text("No repeating payment found yet.", style = MaterialTheme.typography.bodySmall)
-                options.forEach { p ->
-                    OutlinedButton(
-                        onClick = { LoansAndGoals.saveLoan(loan.copy(paymentMerchant = p.merchant, debtAsOf = loan.debtAsOf ?: now)) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("${title(p.merchant)} · ${money(p.lastAmount)} ${p.cadence.label}" + if (p == suggested) " (suggested)" else "")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Waiting for the first payment. It links by itself.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = { picking = !picking }) { Text(if (picking) "Close" else "Pick manually") }
+                }
+                if (picking) {
+                    val suggested = Mortgage.suggestPayment(loan, recurring)
+                    val options = (listOfNotNull(suggested) + recurring.filter { it != suggested }).take(5)
+                    if (options.isEmpty()) Text("No repeating payment found yet.", style = MaterialTheme.typography.bodySmall)
+                    options.forEach { p ->
+                        TextButton(
+                            onClick = { LoansAndGoals.saveLoan(loan.copy(paymentMerchant = p.merchant, debtAsOf = loan.debtAsOf ?: now)); picking = false },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("${title(p.merchant)} · ${money(p.lastAmount)} ${p.cadence.label}", modifier = Modifier.fillMaxWidth())
+                        }
                     }
                 }
             } else {
-                Text("Linked to ${title(loan.paymentMerchant)}", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    listOfNotNull(
-                        payments.lastOrNull()?.accountName?.let { "From $it" },
-                        "${money(status.monthlyPayment)}/month",
-                        status.lastPaymentDate?.let { "last ${dayMonthYear.format(it)}" },
-                        if (paidFromShared) "shared bills" else null
-                    ).joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                TextButton(onClick = { LoansAndGoals.saveLoan(loan.copy(paymentMerchant = "")) }) { Text("Unlink") }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        listOfNotNull("Linked to ${title(loan.paymentMerchant)}", status.lastPaymentDate?.let { "last ${dayMonthYear.format(it)}" }).joinToString(" · "),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = { LoansAndGoals.saveLoan(loan.copy(paymentMerchant = "")) }) { Text("Unlink") }
+                }
             }
         }
 
         // This year's payments.
-        if (status.year.paid > 0) {
-            Card {
-                Text("Paid this year · ${money(status.year.paid)}", style = MaterialTheme.typography.titleSmall)
+        Card {
+            Text(if (status.year.paid > 0) "Paid this year · ${money(status.year.paid)}" else "Paid this year", style = MaterialTheme.typography.titleSmall)
+            if (status.year.paid > 0) {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Figure("Interest", money(status.year.interest), Modifier.weight(1f))
-                    Figure("Bidrag", money(status.year.contribution), Modifier.weight(1f))
-                    Figure("Afdrag", money(status.year.repayment), Modifier.weight(1f))
+                    Figure("Admin fee (bidrag)", money(status.year.contribution), Modifier.weight(1f))
+                    Figure("Repayment (afdrag)", money(status.year.repayment), Modifier.weight(1f))
                 }
-                Text("Afdrag is the part that lowers your debt. Estimated from the rates.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("The repayment is the part that lowers your debt. Estimated from the rates.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                Text(
+                    "Nothing yet. After the first payment you'll see the split into interest, administration fee (bidrag) and repayment (afdrag), the part that lowers the debt.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
 
-        // Debt over time, from now to debt-free.
-        status.monthsLeft?.takeIf { it > 0 }?.let { months ->
+        // Pay extra each month / quarter.
+        val annuity = Mortgage.annuityMonthly(loan, status)
+        if (annuity > 0 && status.monthsLeft != null) {
+            var extra by remember(period) { mutableFloatStateOf(1000f * period) }
             Card {
-                Text("Debt over time", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                DebtChart(status.debt, Mortgage.yearlyRateOf(loan), status.monthlyPayment, months)
-                Row {
-                    Text(monthYear.format(now), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                    Text(monthYear.format(Mortgage.dateAfter(now, months)), style = MaterialTheme.typography.bodySmall)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Pay extra each $perTerm", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                    Text("+${money(extra.toDouble())}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 }
-            }
-        }
-
-        // Correct with the årsopgørelse.
-        val pickStatement = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
-            if (uris.isEmpty()) return@rememberLauncherForActivityResult
-            busy = true
-            scope.launch {
-                LoanDocumentReader.read(context, uris)
-                    .onSuccess { read ->
-                        val debt = read.remainingDebt
-                        if (debt == null) message = "Couldn't find the remaining debt in that document."
-                        else {
-                            LoansAndGoals.saveLoan(loan.copy(remainingDebt = debt, debtAsOf = System.currentTimeMillis()))
-                            message = "Debt corrected to ${money(debt)}."
-                        }
-                    }
-                    .onFailure { message = it.message ?: "Couldn't read the document." }
-                busy = false
-            }
-        }
-        if (LoanDocumentReader.isAvailable) {
-            OutlinedButton(onClick = { pickStatement.launch(arrayOf("application/pdf", "image/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-                Text(if (busy) "Reading…" else "Correct with årsopgørelse")
-            }
-        }
-        message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-
-        // Pay extra each month.
-        if (status.monthlyPayment > 0 && status.monthsLeft != null) {
-            var extra by remember { mutableFloatStateOf(1000f) }
-            Card {
-                Text("Pay extra each month", style = MaterialTheme.typography.titleSmall)
-                Text("+${money(extra.toDouble())}", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
-                Slider(value = extra, onValueChange = { extra = (it / 250).roundToInt() * 250f }, valueRange = 0f..5000f)
-                val effect = Mortgage.extraPayment(status.debt, Mortgage.yearlyRateOf(loan), status.monthlyPayment, extra.toDouble())
+                Slider(value = extra, onValueChange = { extra = (it / (250 * period)).roundToInt() * 250f * period }, valueRange = 0f..5000f * period)
+                val effect = Mortgage.extraPayment(status.debt, Mortgage.interestRateOf(loan), annuity, extra.toDouble() / period, status.monthsLeft)
                 if (effect != null) {
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Figure("Debt-free", monthYear.format(Mortgage.dateAfter(now, effect.monthsLeft)), Modifier.weight(1f))
                         Figure(
-                            "Earlier", if (effect.monthsEarlier == 0) "-" else "${"%.1f".format(Locale.US, effect.monthsEarlier / 12.0)} years",
+                            "Earlier by", if (effect.monthsEarlier == 0) "-" else "${"%.1f".format(Locale.US, effect.monthsEarlier / 12.0)} years",
                             Modifier.weight(1f)
                         )
                         Figure("Interest saved", money(effect.interestSaved), Modifier.weight(1f))
@@ -243,19 +256,30 @@ fun MortgagePage(accounts: List<Account>) {
         // Rate reset preview.
         if (loan.rateType.equals("variable", true) || loan.nextRateReset.isNotBlank()) {
             Card {
-                Text("Rate reset" + (loan.nextRateReset.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""), style = MaterialTheme.typography.titleSmall)
-                Text("If rates go up, your monthly payment becomes:", style = MaterialTheme.typography.bodySmall)
-                val ratePct = (loan.interestRatePct ?: 0.0) + (loan.contributionRatePct ?: 0.0)
-                listOf(0.0, 1.0, 2.0).forEach { delta ->
-                    val payment = if (delta == 0.0) status.monthlyPayment else Mortgage.paymentAfterReset(loan, status, delta)
-                    if (payment != null) {
-                        val diff = payment - status.monthlyPayment
-                        val share = if (paidFromShared) " · your share ${if (delta == 0.0) money(payment * myShare) else "+" + money(diff * myShare)}" else ""
+                val reset = AttentionChecks.parseDate(loan.nextRateReset)?.let { dayMonthYear.format(it) } ?: loan.nextRateReset
+                Text("Rate reset" + (reset.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""), style = MaterialTheme.typography.titleSmall)
+                val i = loan.interestRatePct ?: 0.0
+                val c = loan.contributionRatePct ?: 0.0
+                Text(
+                    "Today: interest ${pct(i)}% + administration fee (bidrag) ${pct(c)}% = ${pct(i + c)}%",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                val today = Mortgage.paymentAfterReset(loan, status, 0.0)
+                if (today != null) {
+                    RateRow("Rate", "Per $perTerm", "Per month", header = true)
+                    listOf(0.0, 1.0, 2.0).forEach { delta ->
+                        Mortgage.paymentAfterReset(loan, status, delta)?.let { monthly ->
+                            RateRow(
+                                if (delta == 0.0) "Today" else "+${delta.roundToInt()}%",
+                                money(monthly * period), money(monthly),
+                                color = if (delta > 0) palette.warning else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                    if (paidFromShared) {
                         Text(
-                            (if (delta == 0.0) "Today ${"%.2f".format(Locale.US, ratePct)}%" else "+${delta.roundToInt()}% → ${"%.2f".format(Locale.US, ratePct + delta)}%") +
-                                ": ${money(payment)}" + (if (delta > 0) " (+${money(diff)})" else "") + share,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (delta > 0) palette.warning else MaterialTheme.colorScheme.onSurface
+                            "Your share at +1%: +${money(((Mortgage.paymentAfterReset(loan, status, 1.0) ?: today) - today) * myShare)} a month.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -264,16 +288,60 @@ fun MortgagePage(accounts: List<Account>) {
 
         HomeCard(loan, status, now, ::money)
 
-        // Interest after rentefradrag.
+        // Interest after the tax deduction.
         if (status.year.interest + status.year.contribution > 0) {
             Card {
                 Text("Interest after tax · this year", style = MaterialTheme.typography.titleSmall)
-                LineRow("Interest + bidrag paid", money(status.year.interest + status.year.contribution))
-                LineRow("Rentefradrag, about 33%", "−" + money((status.year.interest + status.year.contribution) * Mortgage.TAX_DEDUCTION_RATE))
+                LineRow("Interest + administration fee paid", money(status.year.interest + status.year.contribution))
+                LineRow("Tax deduction (rentefradrag), about 33%", "−" + money((status.year.interest + status.year.contribution) * Mortgage.TAX_DEDUCTION_RATE))
                 LineRow("Real cost", "≈ " + money(Mortgage.afterTax(status.year)), bold = true)
-                Text("An estimate. Your årsopgørelse from Skat has the exact figure.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("An estimate. Your yearly tax statement (årsopgørelse) from Skat has the exact figure.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+
+        // Correct the debt with the årsopgørelse.
+        val pickStatement = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
+            if (uris.isEmpty()) return@rememberLauncherForActivityResult
+            busy = true
+            scope.launch {
+                LoanDocumentReader.read(context, uris)
+                    .onSuccess { read ->
+                        val debt = read.remainingDebt
+                        if (debt == null) message = "Couldn't find the remaining debt in that document."
+                        else {
+                            LoansAndGoals.saveLoan(loan.copy(remainingDebt = debt, debtAsOf = System.currentTimeMillis()))
+                            message = "Debt corrected to ${money(debt)}."
+                        }
+                    }
+                    .onFailure { message = it.message ?: "Couldn't read the document." }
+                busy = false
+            }
+        }
+        if (LoanDocumentReader.isAvailable) {
+            TextButton(onClick = { pickStatement.launch(arrayOf("application/pdf", "image/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                Text(if (busy) "Reading…" else "Correct the debt with your yearly tax statement (årsopgørelse)")
+            }
+        }
+        message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+    }
+}
+
+private fun pct(v: Double) = "%.2f".format(Locale.US, v).trimEnd('0').trimEnd('.')
+
+/** "Totalkredit A/S (arranged through SJF Bank A/S)" → "Totalkredit". */
+private fun shortLender(lender: String) = lender.substringBefore(" (").removeSuffix(" A/S").trim()
+
+/** "Adjustable-rate F5, 30-year … (Tilpasningslån F5, …)" → "Adjustable-rate F5". */
+private fun shortType(type: String) = type.substringBefore(",").substringBefore(" (").trim()
+
+@Composable
+private fun RateRow(label: String, perTerm: String, perMonth: String, header: Boolean = false, color: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurface) {
+    val style = MaterialTheme.typography.bodyMedium
+    val c = if (header) MaterialTheme.colorScheme.onSurfaceVariant else color
+    Row {
+        Text(label, style = style, color = c, modifier = Modifier.weight(1f))
+        Text(perTerm, style = style, color = c, fontWeight = if (header) null else FontWeight.SemiBold, modifier = Modifier.weight(1.2f), textAlign = TextAlign.End)
+        Text(perMonth, style = style, color = c, modifier = Modifier.weight(1.1f), textAlign = TextAlign.End)
     }
 }
 
@@ -288,7 +356,7 @@ private fun HomeCard(loan: Loan, status: com.financetracker.app.util.MortgageSta
     var note by remember { mutableStateOf<String?>(null) }
     val pickDeed = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
-        note = "Reading the skøde…"
+        note = "Reading the title deed…"
         scope.launch {
             DeedReader.read(context, uris)
                 .onSuccess { shares ->
@@ -296,15 +364,15 @@ private fun HomeCard(loan: Loan, status: com.financetracker.app.util.MortgageSta
                     if (shares.size == 1 || shares.distinct().size == 1) LoansAndGoals.saveLoan(loan.copy(ownershipSharePct = shares.first()))
                     else deedShares = shares
                 }
-                .onFailure { note = it.message ?: "Couldn't read the skøde." }
+                .onFailure { note = it.message ?: "Couldn't read the title deed." }
         }
     }
 
     Card {
-        Text("Friværdi", style = MaterialTheme.typography.titleSmall)
+        Text("Home equity (friværdi)", style = MaterialTheme.typography.titleSmall)
         val equity = Mortgage.equity(loan, status)
         if (equity == null) {
-            Text("Type in your home's value to see what you own versus what you owe.", style = MaterialTheme.typography.bodySmall)
+            Text("What you own: the home's value minus the debt. Add the value to see it.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
             Text(money(equity), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = LocalAppPalette.current.positive)
             loan.homeValue?.takeIf { it > 0 }?.let { value -> Bar((equity / value).coerceIn(0.0, 1.0).toFloat()) }
@@ -318,13 +386,17 @@ private fun HomeCard(loan: Loan, status: com.financetracker.app.util.MortgageSta
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        TextButton(onClick = { editingValue = true }) { Text(if (loan.homeValue == null) "Add home value" else "Update home value") }
-        if (loan.ownershipSharePct == null) {
-            Text("Your ownership share: not set. It's in the skøde (tinglysning.dk). Until it's set, the whole friværdi is shown.", style = MaterialTheme.typography.bodySmall)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Home value", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            OutlinedButton(onClick = { editingValue = true }) { Text(if (loan.homeValue == null) "Add" else "Update") }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (DeedReader.isAvailable) OutlinedButton(onClick = { pickDeed.launch(arrayOf("application/pdf", "image/*")) }) { Text("Read from skøde") }
-            OutlinedButton(onClick = { editingShare = true }) { Text(if (loan.ownershipSharePct == null) "Enter %" else "Change %") }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Your share" + (loan.ownershipSharePct?.let { ": ${it.roundToInt()}%" } ?: ""), style = MaterialTheme.typography.bodyMedium)
+                Text("from the title deed (skøde)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (DeedReader.isAvailable) TextButton(onClick = { pickDeed.launch(arrayOf("application/pdf", "image/*")) }) { Text("Read") }
+            OutlinedButton(onClick = { editingShare = true }) { Text(if (loan.ownershipSharePct == null) "Set" else "Change") }
         }
         note?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
     }
@@ -368,26 +440,6 @@ private fun NumberDialog(label: String, initial: Double?, onDismiss: () -> Unit,
         confirmButton = { TextButton(onClick = { value?.let(onSave) }, enabled = value != null && value > 0) { Text("Save") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
-}
-
-@Composable
-private fun DebtChart(debt: Double, yearlyRate: Double, monthly: Double, months: Int) {
-    val color = MaterialTheme.colorScheme.primary
-    val points = remember(debt, yearlyRate, monthly, months) {
-        var d = debt
-        val r = yearlyRate / 12
-        (0..months).map { m -> if (m > 0) d = (d + d * r - monthly).coerceAtLeast(0.0); d }
-    }
-    Canvas(modifier = Modifier.fillMaxWidth().height(110.dp)) {
-        val path = Path()
-        points.forEachIndexed { i, v ->
-            val x = size.width * i / points.size.coerceAtLeast(2).minus(1)
-            val y = size.height * (1 - (v / debt).toFloat())
-            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-        }
-        drawPath(path, color, style = Stroke(width = 3.dp.toPx()))
-        drawCircle(color, 5.dp.toPx(), Offset(0f, 0f))
-    }
 }
 
 @Composable

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -30,11 +31,13 @@ import com.financetracker.app.data.db.entity.Account
 import com.financetracker.app.data.household.HouseholdSync
 import com.financetracker.app.data.prefs.CurrencySettings
 import com.financetracker.app.data.prefs.FixedMerchants
+import com.financetracker.app.data.prefs.LoansAndGoals
 import com.financetracker.app.data.prefs.SharedBillsSettings
 import com.financetracker.app.ui.components.GlassCard
 import com.financetracker.app.ui.theme.LocalAppPalette
 import com.financetracker.app.util.BillsAhead
 import com.financetracker.app.util.Formatters
+import com.financetracker.app.util.Mortgage
 import com.financetracker.app.util.SharedBills
 import com.financetracker.app.util.SharedBillsInput
 import com.financetracker.app.util.UpcomingBill
@@ -74,11 +77,12 @@ fun BillsAheadPage(accounts: List<Account>) {
     fun money(v: Double) = Formatters.currency(v, currency)
     val palette = LocalAppPalette.current
 
-    val input = remember(transactions, setup, balance, fixedMerchants, household.partnerSharedBills) {
+    val loans by LoansAndGoals.loans.collectAsState()
+    val input = remember(transactions, setup, balance, fixedMerchants, household.partnerSharedBills, loans) {
         SharedBillsInput(
             setup.accountId!!, transactions, balance, SharedBills.averageNetSalary(transactions, now), setup.partnerNetIncome,
             setup.partnerName, setup.answers, setup.sharedMerchants, fixedMerchants, setup.partnerBills, setup.lockedMySharePct,
-            setup.startedAt, setup.history, household.partnerSharedBills?.side, now
+            setup.startedAt, setup.history, household.partnerSharedBills?.side, now, Mortgage.plannedBills(loans, setup.accountId, now)
         )
     }
     val status = remember(input) { SharedBills.status(input) }
@@ -223,7 +227,25 @@ fun BillsAheadPage(accounts: List<Account>) {
             Text("Month by month", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
             listOf(3, 6, 12).forEach { h -> FilterChip(selected = horizon == h, onClick = { horizon = h }, label = { Text("$h mo") }) }
         }
-        bills.filter { it.everyMonths > 1 }.minByOrNull { it.nextDue }?.let { b ->
+        val nextPlanned = input.planned.minByOrNull { it.nextDue }
+        if (nextPlanned != null) {
+            val (done, amount) = BillsAhead.setAside(nextPlanned, now)
+            GlassCard(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Saving for", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    AheadLine("${nextPlanned.name} · ${aheadDay.format(nextPlanned.nextDue)}", money(nextPlanned.amount), bold = true)
+                    LinearProgressIndicator(
+                        progress = { (done.toFloat() / nextPlanned.everyMonths).coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        "${money(amount)} of ${money(nextPlanned.amount)} set aside ($done of ${nextPlanned.everyMonths} months). " +
+                            "${money(nextPlanned.monthly)} of each month's money goes towards it.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        } else bills.filter { it.everyMonths > 1 }.minByOrNull { it.nextDue }?.let { b ->
             Text(
                 "Saving for: ${b.name}, ${money(b.amount)} in ${aheadMonth.format(b.nextDue)}. Part of each transfer goes towards it, so the balance grows until then.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant

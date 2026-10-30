@@ -1,5 +1,7 @@
 package com.financetracker.app.ui.screens.settings
 
+import androidx.compose.ui.text.style.TextAlign
+import com.financetracker.app.BuildConfig
 import androidx.compose.material.icons.filled.Group
 import com.financetracker.app.data.household.HouseholdSync
 import androidx.compose.foundation.background
@@ -173,7 +175,7 @@ fun SettingsHome(state: SettingsUiState, onOpen: (SettingsPage) -> Unit) {
                 Line(
                     Icons.Filled.House, "Mortgage",
                     loans.firstOrNull { it.kind == "mortgage" }?.let { m ->
-                        if (m.paymentMerchant.isBlank()) "Link the PBS payment to track the debt" else "Debt tracked from its PBS payment"
+                        if (m.paymentMerchant.isBlank()) "Links itself at the first payment" else "Debt tracked from its PBS payment"
                     } ?: "Add it under Loans & goals",
                     SettingsPage.MORTGAGE
                 ),
@@ -205,6 +207,14 @@ fun SettingsHome(state: SettingsUiState, onOpen: (SettingsPage) -> Unit) {
                 Line(Icons.Filled.Tune, "Currency & totals", "$currency · transfers, salary and bills", SettingsPage.GENERAL)
             ),
             onOpen
+        )
+        // Which build this is: each APK gets its own number (its build time).
+        Text(
+            "Version ${BuildConfig.VERSION_NAME}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            textAlign = TextAlign.Center
         )
     }
 }

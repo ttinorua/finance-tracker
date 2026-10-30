@@ -45,7 +45,15 @@ data class Loan(
     val homeValue: Double? = null,
     val homeValueUpdatedAt: Long? = null,
     /** The person's share of the home in %, from the skøde; null = not set (show the whole). */
-    val ownershipSharePct: Double? = null
+    val ownershipSharePct: Double? = null,
+    /** Payments a year: 12 monthly, 4 quarterly (Danish mortgages), 2, 1; null = not said (monthly). */
+    val paymentsPerYear: Int? = null,
+    /** What one payment costs (ydelse per termin), before tax. */
+    val paymentAmount: Double? = null,
+    /** The first (or next) payment date, YYYY-MM-DD; later ones follow every 12 / [paymentsPerYear] months. */
+    val firstPaymentDate: String = "",
+    /** The account the loan is paid from (the shared bills account plans for it then). */
+    val paidFromAccountId: Long? = null
 )
 
 data class SavingsGoal(
@@ -125,6 +133,8 @@ object LoansAndGoals {
         .put("payment_merchant", loan.paymentMerchant).putOpt("debt_as_of", loan.debtAsOf)
         .putOpt("home_value", loan.homeValue).putOpt("home_value_updated_at", loan.homeValueUpdatedAt)
         .putOpt("ownership_share_pct", loan.ownershipSharePct)
+        .putOpt("payments_per_year", loan.paymentsPerYear).putOpt("payment_amount", loan.paymentAmount)
+        .put("first_payment_date", loan.firstPaymentDate).putOpt("paid_from_account_id", loan.paidFromAccountId)
 
     /** Reads a loan from JSON — the app's own format, or what the document reader returns. */
     fun loanFromJson(json: JSONObject, id: String = json.optString("id").ifBlank { UUID.randomUUID().toString() }): Loan {
@@ -143,7 +153,11 @@ object LoansAndGoals {
             debtAsOf = num("debt_as_of")?.toLong(),
             homeValue = num("home_value"),
             homeValueUpdatedAt = num("home_value_updated_at")?.toLong(),
-            ownershipSharePct = num("ownership_share_pct")
+            ownershipSharePct = num("ownership_share_pct"),
+            paymentsPerYear = num("payments_per_year")?.toInt()?.takeIf { it in 1..12 },
+            paymentAmount = num("payment_amount"),
+            firstPaymentDate = text("first_payment_date"),
+            paidFromAccountId = num("paid_from_account_id")?.toLong()
         )
     }
 

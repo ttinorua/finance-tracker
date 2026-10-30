@@ -7,13 +7,15 @@ import com.financetracker.app.BuildConfig
 import com.financetracker.app.data.db.entity.TransactionType
 import com.financetracker.app.data.prefs.EnableBankingPrefs
 import com.financetracker.app.data.prefs.FixedMerchants
+import com.financetracker.app.data.prefs.LoansAndGoals
 import com.financetracker.app.data.prefs.SharedBillsSettings
+import com.financetracker.app.data.repository.FinanceRepository
 import com.financetracker.app.util.CardPayment
+import com.financetracker.app.util.Mortgage
 import com.financetracker.app.util.PartnerReport
 import com.financetracker.app.util.SharedBills
 import com.financetracker.app.util.SharedBillsInput
 import com.financetracker.app.util.SharedLine
-import com.financetracker.app.data.repository.FinanceRepository
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
 import com.google.firebase.Timestamp
@@ -21,6 +23,12 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+import org.json.JSONArray
+import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
@@ -36,12 +44,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
-import org.json.JSONArray
-import org.json.JSONObject
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
 
 /** Everything the household screens show. */
 data class HouseholdState(
@@ -463,7 +465,8 @@ object HouseholdSync {
                 SharedBillsInput(
                     account.id, transactions, repository.getAccountBalance(account), side.netIncome, setup.partnerNetIncome,
                     setup.partnerName, setup.answers, setup.sharedMerchants, FixedMerchants.merchants.value, setup.partnerBills,
-                    setup.lockedMySharePct, setup.startedAt, setup.history, partner, now
+                    setup.lockedMySharePct, setup.startedAt, setup.history, partner, now,
+                    Mortgage.plannedBills(LoansAndGoals.loans.value, account.id, now)
                 )
             )
             json.put("status", JSONObject()

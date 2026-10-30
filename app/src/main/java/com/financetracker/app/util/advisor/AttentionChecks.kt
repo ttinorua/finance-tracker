@@ -1,5 +1,6 @@
 package com.financetracker.app.util.advisor
 
+import com.financetracker.app.util.Mortgage
 import com.financetracker.app.data.prefs.UserAlert
 import com.financetracker.app.data.prefs.AlertKind
 import com.financetracker.app.data.db.entity.Account
@@ -369,6 +370,7 @@ object AttentionChecks {
 
     private fun loans(input: AttentionInput): List<AttentionItem> = input.loans.flatMap { loan ->
         listOfNotNull(
+            loanPaymentSoon(input, loan),
             parseDate(loan.nextRateReset)?.takeIf { it - input.now in 0..(60 * DAY) }?.let { reset ->
                 AttentionItem(
                     "rate-reset:${loan.id}:$reset", AttentionLevel.INFO,
@@ -405,6 +407,23 @@ object AttentionChecks {
                     prompt = "The interest-only period on my loan \"${loan.name}\" ends on ${date(end)}. How much will my payment rise, and how should I prepare?"
                 )
             }
+        )
+    }
+
+    /** A week before a planned loan payment: is there enough in the account it's paid from? */
+    private fun loanPaymentSoon(input: AttentionInput, loan: Loan): AttentionItem? {
+        val due = Mortgage.nextPaymentDate(loan, input.now)?.takeIf { it - input.now in 0..(7 * DAY) } ?: return null
+        val amount = Mortgage.plannedPayment(loan, input.now) ?: return null
+        val accountId = loan.paidFromAccountId ?: return null
+        val account = input.accounts.firstOrNull { it.id == accountId } ?: return null
+        val balance = input.balances[accountId] ?: return null
+        val short = amount - balance
+        return AttentionItem(
+            "loan-payment:${loan.id}:$due", if (short > 0) AttentionLevel.WARNING else AttentionLevel.INFO,
+            "Loan payment ${money(input, amount)} on ${date(due)}",
+            if (short > 0) "${account.name} has ${money(input, balance)}: short by ${money(input, short)}. Move the difference before the payment."
+            else "${account.name} has ${money(input, balance)}: covered ✓",
+            notify = true
         )
     }
 

@@ -58,6 +58,11 @@ data class UpcomingBill(val name: String, val amount: Double, val nextDue: Long,
 /** A recurring bill on your own accounts that could be shared (ticked in Shared bills). */
 data class SharedCandidate(val merchant: String, val monthly: Double, val label: String, val accountName: String?)
 
+/** A bill known before it's been paid (a quarterly loan): one payment, how far apart, when next. */
+data class PlannedBill(val name: String, val merchant: String, val amount: Double, val everyMonths: Int, val nextDue: Long) {
+    val monthly: Double get() = amount / everyMonths.coerceAtLeast(1)
+}
+
 /** Everything [SharedBills.status] needs, gathered from the settings and the transactions. */
 data class SharedBillsInput(
     val billsAccountId: Long,
@@ -80,7 +85,10 @@ data class SharedBillsInput(
     val history: Map<String, Pair<Double, Double>> = emptyMap(),
     /** The partner's own figures, when they share them through the Household. */
     val partner: PartnerReport? = null,
-    val now: Long
+    val now: Long,
+    /** Loans paid from the bills account, counted as planned from day one (their real payments then
+     * only show as paid, never counted twice). */
+    val planned: List<PlannedBill> = emptyList()
 )
 
 data class SharedBillsStatus(
@@ -194,6 +202,11 @@ object SharedBills {
     private fun viaOf(merchant: String) =
         if (merchant.lowercase().split(' ').firstOrNull() in setOf("bs", "pbs")) "your account (PBS)" else "your card"
 
+    private fun plannedVia(p: PlannedBill): String {
+        val every = when (p.everyMonths) { 1 -> "every month"; 3 -> "every quarter"; 6 -> "every half year"; 12 -> "every year"; else -> "every ${p.everyMonths} months" }
+        return "${Formatters.amount(p.amount)} $every · next ${SimpleDateFormat("d MMM", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(p.nextDue)}"
+    }
+
     private fun label(merchant: String) = merchant.split(' ').joinToString(" ") { w -> w.replaceFirstChar { it.uppercase() } }
 
     /**
@@ -243,14 +256,18 @@ object SharedBills {
     }
 
     /** Everything paid out of the bills account, except money moved back to you or the partner. */
-    private fun budgetOutflows(input: SharedBillsInput): List<TransactionWithDetails> {
+    private fun budgetOutflows(input: SharedBillsInput, withPlanned: Boolean = false): List<TransactionWithDetails> {
+        val plannedMerchants = if (withPlanned) emptySet() else input.planned.map { it.merchant }.filter { it.isNotBlank() }.toSet()
         val partnerWords = words(input.partnerName)
         val others = input.transactions.filter { it.accountId != input.billsAccountId }
         fun isTransferBack(tx: TransactionWithDetails): Boolean =
             isTransferCategory(tx.mainCategoryName, tx.categoryName) ||
                 (partnerWords.isNotEmpty() && partnerWords.any { it in tx.note.lowercase() }) ||
                 others.any { it.type == TransactionType.INCOME && abs(it.amount - tx.amount) < 0.005 && abs(it.date - tx.date) <= DAY }
-        return input.transactions.filter { it.accountId == input.billsAccountId && it.type == TransactionType.EXPENSE && !isTransferBack(it) }
+        return input.transactions.filter {
+            it.accountId == input.billsAccountId && it.type == TransactionType.EXPENSE && !isTransferBack(it) &&
+                FinanceAnalysis.merchantOf(it.note) !in plannedMerchants
+        }
     }
 
     /**
@@ -289,6 +306,7 @@ object SharedBills {
                         ?: UpcomingBill(label(c.merchant), c.monthly, oneMonthAfter(now, now), 1)
                 }
         }
+        result += input.planned.map { UpcomingBill(it.name, it.amount, it.nextDue, it.everyMonths) }
         return result.sortedByDescending { it.amount }
     }
 
@@ -298,7 +316,7 @@ object SharedBills {
      */
     fun paidThisMonth(input: SharedBillsInput, includeTicked: Boolean): List<PaidBill> {
         val start = FinanceAnalysis.monthStart(input.now)
-        val fromBudget = budgetOutflows(input).filter { it.date >= start }
+        val fromBudget = budgetOutflows(input, withPlanned = true).filter { it.date >= start }
             .map { PaidBill(label(FinanceAnalysis.merchantOf(it.note).ifBlank { "Other" }), it.amount, it.date, true) }
         if (!includeTicked) return fromBudget.sortedBy { it.date }
         val mine = input.transactions.filter {
@@ -328,9 +346,10 @@ object SharedBills {
         val historyMonths = ((now - windowStart).toDouble() / (30.44 * DAY)).coerceAtLeast(0.0)
         val divisor = historyMonths.coerceAtLeast(1.0)
         val inWindow = outflows.filter { it.date >= windowStart }
-        val budgetMonthly = inWindow.sumOf { it.amount } / divisor
-        val budgetPayees = inWindow.groupBy { FinanceAnalysis.merchantOf(it.note) }
-            .map { (m, txs) -> SharedLine(label(m.ifBlank { "Other" }), txs.sumOf { it.amount } / divisor) }
+        val budgetMonthly = inWindow.sumOf { it.amount } / divisor + input.planned.sumOf { it.monthly }
+        val budgetPayees = (inWindow.groupBy { FinanceAnalysis.merchantOf(it.note) }
+            .map { (m, txs) -> SharedLine(label(m.ifBlank { "Other" }), txs.sumOf { it.amount } / divisor) } +
+            input.planned.map { SharedLine(it.name, it.monthly, plannedVia(it)) })
             .sortedByDescending { it.monthly }
 
         // 1a + 1b: your ticked card bills, minus any now paid from the bills account.

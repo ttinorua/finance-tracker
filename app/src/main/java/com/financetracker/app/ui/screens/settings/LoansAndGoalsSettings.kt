@@ -1,5 +1,7 @@
 package com.financetracker.app.ui.screens.settings
 
+import com.financetracker.app.util.Mortgage
+import com.financetracker.app.data.prefs.SharedBillsSettings
 import androidx.compose.material3.IconButton
 import androidx.compose.material.icons.filled.Delete
 import com.financetracker.app.data.prefs.WeeklySummarySettings
@@ -171,6 +173,7 @@ fun LoansAndGoalsSettings(accounts: List<AccountUi>, modifier: Modifier = Modifi
     editingLoan?.let { loan ->
         LoanDialog(
             loan = loan,
+            accounts = accounts,
             isNew = loans.none { it.id == loan.id },
             onSave = {
                 // A newly typed debt is the new exact figure the mortgage estimate starts from.
@@ -222,8 +225,15 @@ private fun ItemRow(title: String, detail: String, onClick: () -> Unit) {
 private val LOAN_KINDS = listOf("mortgage" to "Mortgage", "bank_loan" to "Bank loan", "car_loan" to "Car loan", "student_loan" to "Student loan", "other" to "Other")
 
 @Composable
-private fun LoanDialog(loan: Loan, isNew: Boolean, onSave: (Loan) -> Unit, onDelete: () -> Unit, onDismiss: () -> Unit) {
-    var draft by remember(loan.id) { mutableStateOf(loan) }
+private fun LoanDialog(loan: Loan, accounts: List<AccountUi>, isNew: Boolean, onSave: (Loan) -> Unit, onDelete: () -> Unit, onDismiss: () -> Unit) {
+    // A new mortgage is paid from the shared bills account, when there is one.
+    var draft by remember(loan.id) {
+        mutableStateOf(
+            if (isNew && loan.kind == "mortgage" && loan.paidFromAccountId == null) loan.copy(paidFromAccountId = SharedBillsSettings.setup.value.accountId)
+            else loan
+        )
+    }
+    val currency by CurrencySettings.currencyCode.collectAsState()
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (isNew) "Loan" else "Edit loan") },
@@ -261,8 +271,43 @@ private fun LoanDialog(loan: Loan, isNew: Boolean, onSave: (Loan) -> Unit, onDel
                 NumberField("Remaining debt", draft.remainingDebt) { draft = draft.copy(remainingDebt = it) }
                 NumberField("Original amount", draft.originalAmount) { draft = draft.copy(originalAmount = it) }
                 NumberField("Interest rate (% a year)", draft.interestRatePct) { draft = draft.copy(interestRatePct = it) }
-                NumberField("Contribution rate / bidragssats (%)", draft.contributionRatePct) { draft = draft.copy(contributionRatePct = it) }
-                NumberField("Monthly payment", draft.monthlyPayment) { draft = draft.copy(monthlyPayment = it) }
+                NumberField("Administration fee rate (bidragssats, %)", draft.contributionRatePct) { draft = draft.copy(contributionRatePct = it) }
+                Text("How often is it paid?", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(12 to "Monthly", 4 to "Quarterly", 2 to "Half-year", 1 to "Yearly").forEach { (n, label) ->
+                        FilterChip(
+                            selected = (draft.paymentsPerYear ?: 12) == n,
+                            onClick = { draft = draft.copy(paymentsPerYear = n) },
+                            label = { Text(label) }
+                        )
+                    }
+                }
+                if ((draft.paymentsPerYear ?: 12) == 12) {
+                    NumberField("Monthly payment", draft.monthlyPayment) { draft = draft.copy(monthlyPayment = it) }
+                } else {
+                    NumberField("Amount per payment (ydelse per termin)", draft.paymentAmount) { draft = draft.copy(paymentAmount = it) }
+                    draft.paymentAmount?.takeIf { it > 0 }?.let { amount ->
+                        Text(
+                            "${Formatters.currency(amount / Mortgage.periodMonths(draft), currency)} a month to set aside",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                Field("First payment (YYYY-MM-DD)", draft.firstPaymentDate) { draft = draft.copy(firstPaymentDate = it) }
+                Text("Paid from", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 4.dp))
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    FilterChip(selected = draft.paidFromAccountId == null, onClick = { draft = draft.copy(paidFromAccountId = null) }, label = { Text("Not set") })
+                    accounts.forEach { account ->
+                        FilterChip(
+                            selected = draft.paidFromAccountId == account.account.id,
+                            onClick = { draft = draft.copy(paidFromAccountId = account.account.id) },
+                            label = { Text(account.account.name) }
+                        )
+                    }
+                }
                 NumberField("Years left", draft.yearsLeft) { draft = draft.copy(yearsLeft = it) }
                 Field("Rate type (fixed / variable)", draft.rateType) { draft = draft.copy(rateType = it) }
                 Field("Next rate reset", draft.nextRateReset) { draft = draft.copy(nextRateReset = it) }

@@ -1,3 +1,7 @@
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import java.util.Base64
 import java.util.Properties
 
@@ -73,8 +77,11 @@ android {
         applicationId = "com.financetracker.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        // Each build gets its own number from its build time (Danish time), so you can tell which
+        // APK is installed (Settings, at the bottom). The code keeps rising, so updates install.
+        val builtAt = ZonedDateTime.now(ZoneId.of("Europe/Copenhagen"))
+        versionCode = ((builtAt.toEpochSecond() - 1_767_225_600L) / 60).toInt() // minutes since 1 Jan 2026
+        versionName = "1.1 · " + builtAt.format(DateTimeFormatter.ofPattern("d MMM yyyy, HH:mm", Locale.US))
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "ANTHROPIC_API_KEY", "\"$anthropicApiKey\"")

@@ -1,21 +1,6 @@
 package com.financetracker.app.ui.screens.settings
 
 import android.content.Intent
-import androidx.compose.foundation.selection.toggleable
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Switch
-import com.financetracker.app.data.household.HouseholdSync
-import com.financetracker.app.data.household.SharedBillsSnapshot
-import com.financetracker.app.data.prefs.FixedMerchants
-import com.financetracker.app.util.BillCadence
-import com.financetracker.app.util.PartnerBill
-import com.financetracker.app.util.SharedBillsInput
-import java.util.UUID
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,21 +11,29 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -54,17 +47,26 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.financetracker.app.FinanceApp
 import com.financetracker.app.data.db.entity.Account
+import com.financetracker.app.data.household.HouseholdSync
+import com.financetracker.app.data.household.SharedBillsSnapshot
 import com.financetracker.app.data.prefs.CurrencySettings
+import com.financetracker.app.data.prefs.FixedMerchants
+import com.financetracker.app.data.prefs.LoansAndGoals
 import com.financetracker.app.data.prefs.SharedBillsSettings
 import com.financetracker.app.ui.components.GlassCard
 import com.financetracker.app.ui.theme.LocalAppPalette
+import com.financetracker.app.util.BillCadence
 import com.financetracker.app.util.Contributor
 import com.financetracker.app.util.Formatters
+import com.financetracker.app.util.Mortgage
+import com.financetracker.app.util.PartnerBill
 import com.financetracker.app.util.SharedBills
+import com.financetracker.app.util.SharedBillsInput
 import com.financetracker.app.util.SharedBillsStatus
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
+import java.util.UUID
 import kotlin.math.roundToInt
 
 private val dayFormat = SimpleDateFormat("d MMM", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
@@ -116,12 +118,13 @@ fun SharedBillsPage(accounts: List<Account>) {
         balance = account?.let { repository.getAccountBalance(it) } ?: 0.0
     }
     val myIncome = remember(transactions) { SharedBills.averageNetSalary(transactions, now) }
-    val status = remember(transactions, setup, balance, partnerReport, fixedMerchants) {
+    val loans by LoansAndGoals.loans.collectAsState()
+    val status = remember(transactions, setup, balance, partnerReport, fixedMerchants, loans) {
         SharedBills.status(
             SharedBillsInput(
                 setup.accountId!!, transactions, balance, myIncome, setup.partnerNetIncome, setup.partnerName, setup.answers,
                 setup.sharedMerchants, fixedMerchants, setup.partnerBills, setup.lockedMySharePct, setup.startedAt, setup.history,
-                partnerReport?.side, now
+                partnerReport?.side, now, Mortgage.plannedBills(loans, setup.accountId, now)
             )
         )
     }

@@ -206,4 +206,23 @@ class SharedBillsTest {
         assertEquals(listOf(4000.0), side.transfersOut.map { it.amount })
         assertNull(side.transfersOut.firstOrNull { it.amount == 250.0 })
     }
+
+    @Test
+    fun `a planned quarterly loan counts a third a month from day one, never twice`() {
+        val loan = com.financetracker.app.util.PlannedBill("House mortgage", "bs totalkredit", 60_000.0, 3, utc(2026, 12, 31))
+        val withLoan: (SharedBillsInput) -> SharedBillsInput = { it.copy(planned = listOf(loan)) }
+        val before = SharedBills.status(input(newAccount(), withLoan))
+        val without = SharedBills.status(input(newAccount()))
+        assertEquals(without.monthlyBills + 20_000.0, before.monthlyBills, 0.01)
+        assertTrue(before.budgetPayees.any { it.name == "House mortgage" && it.monthly == 20_000.0 })
+        // The real payment arrives: still a third a month, shown as paid, not added again.
+        val paid = newAccount() + tx(bills, 60_000.0, TransactionType.EXPENSE, utc(2026, 10, 20), "BS Totalkredit")
+        val after = SharedBills.status(input(paid, withLoan))
+        assertEquals(before.monthlyBills, after.monthlyBills, 0.01)
+        assertTrue(SharedBills.paidThisMonth(input(paid, withLoan), false).any { it.amount == 60_000.0 })
+        val upcoming = SharedBills.upcomingBills(input(paid, withLoan), false)
+        assertEquals(1, upcoming.count { it.amount == 60_000.0 && it.everyMonths == 3 })
+        // Saving for it: two months to go at the end of October, so 1 of 3 months set aside.
+        assertEquals(1 to 20_000.0, com.financetracker.app.util.BillsAhead.setAside(loan, now))
+    }
 }

@@ -49,6 +49,16 @@ object BillsAhead {
     }
 
     /**
+     * How far along the saving for [bill] is: months of it set aside so far (this month counted)
+     * out of [PlannedBill.everyMonths], and the amount that stands for.
+     */
+    fun setAside(bill: PlannedBill, now: Long): Pair<Int, Double> {
+        val monthsToGo = Mortgage.monthsBetween(FinanceAnalysis.monthStart(now), FinanceAnalysis.monthStart(bill.nextDue))
+        val done = (bill.everyMonths - monthsToGo).coerceIn(0, bill.everyMonths)
+        return done to bill.monthly * done
+    }
+
+    /**
      * [months] months starting with [now]'s month. [extra] is a what-if bill: an amount in the month
      * at that index (0 = this month).
      */
