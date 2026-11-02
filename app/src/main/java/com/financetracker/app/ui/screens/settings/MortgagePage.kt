@@ -246,9 +246,11 @@ fun MortgagePage(accountList: List<AccountUi>) {
 
         // From the lender's payment table: the next payment in parts, and the table itself.
         var showTable by remember { mutableStateOf(false) }
+        var readingTable by remember { mutableStateOf(false) }
         val pickTable = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
             if (uris.isEmpty()) return@rememberLauncherForActivityResult
             busy = true
+            readingTable = true
             message = "Reading the loan document. A long payment table takes a minute or two…"
             scope.launch {
                 LoanDocumentReader.read(context, uris)
@@ -261,6 +263,7 @@ fun MortgagePage(accountList: List<AccountUi>) {
                     }
                     .onFailure { message = it.message ?: "Couldn't read the document." }
                 busy = false
+                readingTable = false
             }
         }
         val scheduled = LoanSchedule.nextPayment(loan, now)
@@ -452,13 +455,13 @@ fun MortgagePage(accountList: List<AccountUi>) {
         if (LoanDocumentReader.isAvailable) {
             TextButton(onClick = { pickTable.launch(arrayOf("application/pdf", "image/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    if (busy) "Reading…"
+                    if (readingTable) "Reading…"
                     else if (loan.schedule.isEmpty()) "Add the payment table from your loan document (lånespecifikation)"
                     else "Update the payment table from a newer loan document"
                 )
             }
             TextButton(onClick = { pickStatement.launch(arrayOf("application/pdf", "image/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-                Text(if (busy) "Reading…" else "Correct the debt with your yearly tax statement (årsopgørelse)")
+                Text(if (busy && !readingTable) "Reading…" else "Correct the debt with your yearly tax statement (årsopgørelse)")
             }
         }
         message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }

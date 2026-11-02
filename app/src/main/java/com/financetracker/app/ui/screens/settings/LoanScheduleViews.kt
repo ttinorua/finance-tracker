@@ -45,6 +45,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.financetracker.app.data.prefs.Loan
+import com.financetracker.app.ui.theme.LocalAppPalette
+import com.financetracker.app.ui.theme.appBackdrop
 import com.financetracker.app.util.Formatters
 import com.financetracker.app.util.LoanSchedule
 import java.text.DecimalFormat
@@ -110,13 +112,16 @@ internal fun LoanScheduleDialog(loan: Loan, currency: String, onDismiss: () -> U
     val years = remember(loan) { LoanSchedule.yearTotals(loan) }
     val resets = remember(loan) { LoanSchedule.resetDates(loan) }
     var open by remember { mutableStateOf<Int?>(null) }
-    val primary = MaterialTheme.colorScheme.primary
-    val muted = MaterialTheme.colorScheme.outline
+    val palette = LocalAppPalette.current
+    // Repayment green against grey interest, told apart by lightness too, not only colour.
+    val primary = palette.positive
+    val muted = palette.muted.copy(alpha = 0.55f)
     val max = years.maxOfOrNull { it.interestAndFee - it.discount + it.principal }?.takeIf { it > 0 } ?: 1.0
     fun money(v: Double) = Formatters.currency(v, currency)
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        // The app's theme is see-through (cards over a gradient), so paint the gradient here like other full-screen dialogs.
+        Surface(modifier = Modifier.fillMaxSize().appBackdrop(palette), color = Color.Transparent) {
             Column(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
                 Row(modifier = Modifier.padding(start = 4.dp, end = 16.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = onDismiss) { Icon(Icons.Filled.Close, contentDescription = "Close") }
@@ -134,7 +139,7 @@ internal fun LoanScheduleDialog(loan: Loan, currency: String, onDismiss: () -> U
                             modifier = Modifier.padding(vertical = 6.dp)
                         )
                         years.forEach { y ->
-                            val alpha = if (y.estimates == y.payments) 0.4f else 1f
+                            val alpha = if (y.estimates == y.payments) 0.45f else 1f
                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
                                 Text("${y.year}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(40.dp))
                                 Row(modifier = Modifier.weight(1f).height(12.dp)) {
