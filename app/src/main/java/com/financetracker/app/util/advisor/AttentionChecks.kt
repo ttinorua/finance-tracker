@@ -1,5 +1,6 @@
 package com.financetracker.app.util.advisor
 
+import com.financetracker.app.util.LoanSchedule
 import com.financetracker.app.util.Mortgage
 import com.financetracker.app.data.prefs.UserAlert
 import com.financetracker.app.data.prefs.AlertKind
@@ -374,13 +375,25 @@ object AttentionChecks {
     private fun loans(input: AttentionInput): List<AttentionItem> = input.loans.flatMap { loan ->
         listOfNotNull(
             loanPaymentSoon(input, loan),
-            parseDate(loan.nextRateReset)?.takeIf { it - input.now in 0..(60 * DAY) }?.let { reset ->
+            // Every rate reset in the document counts, not just the next one typed in; 3 months' notice.
+            LoanSchedule.nextRateReset(loan, input.now)?.takeIf { it - input.now in 0..(92 * DAY) }?.let { reset ->
                 AttentionItem(
                     "rate-reset:${loan.id}:$reset", AttentionLevel.INFO,
                     "${loan.name}: interest rate resets ${date(reset)}",
-                    "Your rate will be set again then — a good moment to check whether to keep the loan type.",
+                    "Your rate will be set again then" +
+                        (LoanSchedule.debtOn(loan, reset)?.let { " on about ${money(input, it)} of debt" } ?: "") +
+                        " — a good moment to check whether to keep the loan type.",
                     notify = true,
                     prompt = "The interest rate on my loan \"${loan.name}\" resets on ${date(reset)}. What could happen to my payment, and should I consider switching loan type?"
+                )
+            },
+            // A fee discount the lender only guarantees until a date (e.g. KundeKroner).
+            parseDate(loan.discountUntil)?.takeIf { (loan.discountPct ?: 0.0) > 0 && it - input.now in 0..(92 * DAY) }?.let { until ->
+                AttentionItem(
+                    "loan-discount:${loan.id}:$until", AttentionLevel.INFO,
+                    "${loan.name}: ${loan.discountName.ifBlank { "fee discount" }} guaranteed until ${date(until)}",
+                    "After that the lender can change or drop the ${loan.discountPct}% discount, so payments may go up.",
+                    notify = true
                 )
             },
             // A home value older than half a year makes friværdi stale.

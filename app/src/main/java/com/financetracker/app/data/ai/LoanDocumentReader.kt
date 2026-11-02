@@ -15,6 +15,8 @@ import org.json.JSONObject
 object LoanDocumentReader {
 
     const val MAX_FILES = 6
+    /** Room for a whole payment table (a 30-year quarterly loan has ~120 rows) on top of the terms. */
+    private const val MAX_REPLY_TOKENS = 12_000
 
     private val PROMPT = """
         This is a loan or mortgage document (for example a loan offer, loan agreement, mortgage deed or annual statement — lånetilbud, låneaftale, pantebrev, gældsbrev, årsopgørelse), most likely in Danish. Extract its key terms for the borrower's personal finance app, in English.
@@ -25,8 +27,8 @@ object LoanDocumentReader {
         - "kind": one of "mortgage", "bank_loan", "car_loan", "student_loan", "other"
         - "loan_type": in English with the Danish term in brackets, e.g. "Adjustable-rate F5 (rentetilpasningslån F5)" or "Fixed-rate 30 years (fastforrentet obligationslån)"
         - "original_amount", "remaining_debt": numbers (the debt / hovedstol / restgæld)
-        - "interest_rate_pct": the nominal yearly interest rate in % (number)
-        - "contribution_rate_pct": the mortgage contribution rate (bidragssats) in % a year (number)
+        - "interest_rate_pct": the yearly interest rate in % (number); for a Danish mortgage the cash rate (kontantrente). If only given per payment (e.g. "Rente 0,9165% af restgæld" per quarter), multiply up to a year
+        - "contribution_rate_pct": the mortgage contribution rate (bidragssats) in % a year (number); if given per quarter (e.g. "Bidrag 0,2186% af restgæld"), multiply by 4
         - "monthly_payment": the payment per month (number); if payments are quarterly, divide by 3
         - "payments_per_year": how many payments a year (number: 12 monthly, 4 quarterly, 2, 1); Danish mortgages are usually 4 (terminer)
         - "first_payment_date": the first payment date (første betaling / første termin), YYYY-MM-DD
@@ -37,11 +39,20 @@ object LoanDocumentReader {
         - "interest_only_until": end of any interest-only period (afdragsfrihed)
         - "rate_type": "fixed" or "variable"
         - "next_rate_reset": the next interest rate reset (rentetilpasning), if any
-        - "early_repayment": the early repayment / redemption terms (indfrielse, kurs, fees) in English
+        - "early_repayment": the early repayment / redemption terms (indfrielse, kurs, fees) in English; if the loan is funded by bonds, also say the bond debt (obligationshovedstol / obligationsrestgæld) next to the cash debt, since paying off early costs the bonds' market price
         - "other_terms": other important terms in English with Danish terms in brackets (APR / ÅOP, fees, security, conditions)
         - "summary": a plain-English summary of the document in 3 to 6 sentences, explaining any Danish terms
+        - "schedule": EVERY row of the payment table (afdragsforløb / ydelsesforløb), across all pages, oldest first, each as an array [date "YYYY-MM-DD", interest and fee (rente og bidrag), repayment (afdrag), payment before tax (ydelse før skat), payment after tax (ydelse efter skat, or null), debt left after it (kontantrestgæld / restgæld)]. Skip marker rows without numbers (e.g. "Rentetilpasning"). Copy the numbers exactly. [] if there is no table.
+        - "total_payments": how many payments (terminer) the loan has in all (number)
+        - "rate_resets": every interest rate reset (rentetilpasning) as "YYYY-MM-DD", the date it takes effect (e.g. 1 July), [] if none
+        - "discount_name", "discount_pct", "discount_until": a discount on the fee that the payment table does NOT include (e.g. Totalkredit's KundeKroner): its name, % a year of the debt, and the date it's guaranteed until as "YYYY-MM-DD" or "YYYY-MM"
+        - "tax_deduction_pct": the tax rate used for the after-tax figures (skattesats), in %
+        - "setup_costs": total one-off costs of taking the loan (omkostninger ved optagelse af lån)
+        - "total_interest_and_fees": total interest and fee over the loan's life (samlet rente og bidrag i lånets løbetid)
+        - "total_repayable": the total to pay over the loan's life (det samlede beløb, der skal betales)
+        - "aop_pct": the ÅOP (yearly cost in % with all costs)
 
-        Numbers are plain JSON numbers: Danish documents write 1.234.567,89 meaning 1234567.89.
+        Numbers are plain JSON numbers: Danish documents write 1.234.567,89 meaning 1234567.89. Dates in the document are Danish (11.12.2026 is 11 December 2026).
         Never include personal data: no CPR numbers, account, loan or customer numbers, names of people or addresses.
     """.trimIndent()
 
@@ -49,7 +60,8 @@ object LoanDocumentReader {
     val isAvailable: Boolean get() = DocumentAi.isAvailable
 
     suspend fun read(context: Context, uris: List<Uri>): Result<Loan> =
-        DocumentAi.read(context, uris.take(MAX_FILES), PROMPT, "Extract the loan terms as described.", 3_000).mapCatching { toLoan(it) }
+        DocumentAi.read(context, uris.take(MAX_FILES), PROMPT, "Extract the loan terms as described.", MAX_REPLY_TOKENS, readTimeoutMs = 240_000)
+            .mapCatching { toLoan(it) }
 
     internal fun toLoan(text: String): Loan {
         val start = text.indexOf('{')
@@ -60,6 +72,7 @@ object LoanDocumentReader {
         return loan.copy(
             name = scrub(loan.name).ifBlank { "Loan" },
             lender = scrub(loan.lender),
+            discountName = scrub(loan.discountName),
             loanType = scrub(loan.loanType),
             earlyRepayment = scrub(loan.earlyRepayment),
             otherTerms = scrub(loan.otherTerms),

@@ -60,18 +60,18 @@ internal object GeminiService {
 
     /** Sends [body]; if Gemini rejects an optional setting (400), retries once without the
      * thinking and schema settings rather than failing outright. */
-    fun send(key: String, body: JSONObject): JSONObject {
-        var first = post(key, body)
+    fun send(key: String, body: JSONObject, readTimeoutMs: Int = 90_000): JSONObject {
+        var first = post(key, body, readTimeoutMs)
         // "High demand" is usually over within seconds.
         if (first.first == 503) {
             Thread.sleep(2_000)
-            first = post(key, body)
+            first = post(key, body, readTimeoutMs)
         }
         val response = if (first.first == 400) {
             val config = body.getJSONObject("generationConfig")
             config.remove("thinkingConfig")
             config.remove("responseJsonSchema")
-            post(key, body)
+            post(key, body, readTimeoutMs)
         } else {
             first
         }
@@ -94,12 +94,12 @@ internal object GeminiService {
         return json
     }
 
-    private fun post(key: String, body: JSONObject): Pair<Int, String> {
+    private fun post(key: String, body: JSONObject, readTimeoutMs: Int): Pair<Int, String> {
         val connection = URL(GEMINI_URL).openConnection() as HttpURLConnection
         try {
             connection.requestMethod = "POST"
             connection.connectTimeout = 20_000
-            connection.readTimeout = 90_000
+            connection.readTimeout = readTimeoutMs
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", "application/json")
             connection.setRequestProperty("x-goog-api-key", key)

@@ -52,6 +52,7 @@ import com.financetracker.app.data.prefs.SharedBillsSettings
 import com.financetracker.app.ui.components.GlassCard
 import com.financetracker.app.ui.theme.LocalAppPalette
 import com.financetracker.app.util.Formatters
+import com.financetracker.app.util.LoanSchedule
 import com.financetracker.app.util.Mortgage
 import com.financetracker.app.util.SharedBills
 import com.financetracker.app.util.advisor.FinanceAnalysis
@@ -243,6 +244,59 @@ fun MortgagePage(accountList: List<AccountUi>) {
             }
         }
 
+        // From the lender's payment table: the next payment in parts, and the table itself.
+        var showTable by remember { mutableStateOf(false) }
+        val pickTable = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
+            if (uris.isEmpty()) return@rememberLauncherForActivityResult
+            busy = true
+            message = "Reading the loan document. A long payment table takes a minute or two…"
+            scope.launch {
+                LoanDocumentReader.read(context, uris)
+                    .onSuccess { read ->
+                        if (read.schedule.isEmpty()) message = "No payment table (afdragsforløb) found in that document."
+                        else {
+                            LoansAndGoals.saveLoan(LoanSchedule.withDocument(loan, read))
+                            message = "Payment table added: ${read.schedule.size} payments. Check that every row adds up below."
+                        }
+                    }
+                    .onFailure { message = it.message ?: "Couldn't read the document." }
+                busy = false
+            }
+        }
+        val scheduled = LoanSchedule.nextPayment(loan, now)
+        if (scheduled != null) {
+            Card {
+                Text("Next payment in parts · ${dayMonthYear.format(scheduled.date)}", style = MaterialTheme.typography.titleSmall)
+                Text(money(scheduled.youPay), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                scheduled.interest?.let { LineRow("Interest", money(it)) }
+                scheduled.fee?.let { LineRow("Administration fee (bidrag)", money(it)) }
+                if (scheduled.interest == null) LineRow("Interest & fee", money(scheduled.interestAndFee))
+                LineRow("Repayment (afdrag)", money(scheduled.principal))
+                if (scheduled.discount > 0) {
+                    LineRow("${loan.discountName.ifBlank { "Discount" }} off the fee", "−" + money(scheduled.discount))
+                    Text("Payment in the lender's table: ${money(scheduled.bankPayment)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                LineRow("After tax deduction (${pct(LoanSchedule.taxRate(loan) * 100)}%)", "≈ " + money(scheduled.afterTax), bold = true)
+                if (scheduled.estimate) Text("The lender's estimate: the rate has been reset since the document.", style = MaterialTheme.typography.bodySmall, color = palette.warning)
+            }
+        }
+        if (loan.schedule.isNotEmpty()) {
+            Card {
+                val total = loan.totalPayments ?: loan.schedule.size
+                val paidCount = LoanSchedule.paidCount(loan, now)
+                Text("Payment table · $paidCount of $total paid", style = MaterialTheme.typography.titleSmall)
+                Bar((paidCount.toFloat() / total.coerceAtLeast(1)).coerceIn(0f, 1f))
+                Text(
+                    "From the lender's document, last payment ${dayMonthYear.format(LoanSchedule.payments(loan).last().date)}. " +
+                        "Debt, payments and this year's split use it instead of estimates.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                ScheduleCheck(loan) { LoansAndGoals.saveLoan(it) }
+                OutlinedButton(onClick = { showTable = true }, modifier = Modifier.fillMaxWidth()) { Text("View full payment table") }
+            }
+        }
+        if (showTable) LoanScheduleDialog(loan, currency) { showTable = false }
+
         // This year's payments.
         Card {
             Text(if (status.year.paid > 0) "Paid this year · ${money(status.year.paid)}" else "Paid this year", style = MaterialTheme.typography.titleSmall)
@@ -295,7 +349,7 @@ fun MortgagePage(accountList: List<AccountUi>) {
         // Rate reset preview.
         if (loan.rateType.equals("variable", true) || loan.nextRateReset.isNotBlank()) {
             Card {
-                val reset = AttentionChecks.parseDate(loan.nextRateReset)?.let { dayMonthYear.format(it) } ?: loan.nextRateReset
+                val reset = (LoanSchedule.nextRateReset(loan, now) ?: AttentionChecks.parseDate(loan.nextRateReset))?.let { dayMonthYear.format(it) } ?: loan.nextRateReset
                 Text("Rate reset" + (reset.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""), style = MaterialTheme.typography.titleSmall)
                 val i = loan.interestRatePct ?: 0.0
                 val c = loan.contributionRatePct ?: 0.0
@@ -303,6 +357,13 @@ fun MortgagePage(accountList: List<AccountUi>) {
                     "Today: interest ${pct(i)}% + administration fee (bidrag) ${pct(c)}% = ${pct(i + c)}%",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                val resets = LoanSchedule.resetDates(loan)
+                if (resets.size > 1) {
+                    Text("Every reset, with the debt left then:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    resets.forEach { r ->
+                        LineRow(dayMonthYear.format(r) + if (r < now) " (passed)" else "", LoanSchedule.debtOn(loan, r)?.let { money(it) } ?: "")
+                    }
+                }
                 val today = Mortgage.paymentAfterReset(loan, status, 0.0)
                 if (today != null) {
                     RateRow("Rate", "Per $perTerm", "Per month", header = true)
@@ -325,6 +386,34 @@ fun MortgagePage(accountList: List<AccountUi>) {
             }
         }
 
+        loan.discountPct?.takeIf { it > 0 }?.let { discountPct ->
+            Card {
+                Text(loan.discountName.ifBlank { "Fee discount" }, style = MaterialTheme.typography.titleSmall)
+                LineRow("Discount", "${pct(discountPct)}% a year of the debt")
+                val nextYear = LoanSchedule.yearOf(now) + 1
+                LoanSchedule.yearTotals(loan).firstOrNull { it.year == nextYear }?.takeIf { it.discount > 0 }?.let { LineRow("In $nextYear", "≈ " + money(it.discount), bold = true) }
+                if (loan.discountUntil.isNotBlank()) {
+                    LineRow("Guaranteed until", AttentionChecks.parseDate(loan.discountUntil)?.let { dayMonthYear.format(it) } ?: loan.discountUntil)
+                }
+                Text(
+                    "Taken off the administration fee each payment. The lender's table leaves it out, so the app takes it off.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        if (loan.totalRepayable != null || loan.totalInterestAndFees != null || loan.setupCosts != null || loan.aopPct != null) {
+            Card {
+                Text("What the loan costs in total", style = MaterialTheme.typography.titleSmall)
+                loan.originalAmount?.let { LineRow("Borrowed", money(it)) }
+                loan.totalInterestAndFees?.let { LineRow("Interest & fee over the loan", money(it)) }
+                loan.totalRepayable?.let { LineRow("Total you pay back", money(it), bold = true) }
+                loan.setupCosts?.let { LineRow("Setup costs (paid once)", money(it)) }
+                loan.aopPct?.let { LineRow("Yearly cost with all fees (ÅOP)", "${pct(it)}%") }
+                Text("From the loan document, at today's rate for the whole loan.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
         HomeCard(loan, status, now, ::money)
 
         // Interest after the tax deduction.
@@ -332,8 +421,12 @@ fun MortgagePage(accountList: List<AccountUi>) {
             Card {
                 Text("Interest after tax · this year", style = MaterialTheme.typography.titleSmall)
                 LineRow("Interest + administration fee paid", money(status.year.interest + status.year.contribution))
-                LineRow("Tax deduction (rentefradrag), about 33%", "−" + money((status.year.interest + status.year.contribution) * Mortgage.TAX_DEDUCTION_RATE))
-                LineRow("Real cost", "≈ " + money(Mortgage.afterTax(status.year)), bold = true)
+                val taxRate = LoanSchedule.taxRate(loan)
+                LineRow(
+                    "Tax deduction (rentefradrag), " + if (loan.taxDeductionPct != null) "${pct(taxRate * 100)}%" else "about 33%",
+                    "−" + money((status.year.interest + status.year.contribution) * taxRate)
+                )
+                LineRow("Real cost", "≈ " + money(Mortgage.afterTax(status.year, loan)), bold = true)
                 Text("An estimate. Your yearly tax statement (årsopgørelse) from Skat has the exact figure.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -357,6 +450,13 @@ fun MortgagePage(accountList: List<AccountUi>) {
             }
         }
         if (LoanDocumentReader.isAvailable) {
+            TextButton(onClick = { pickTable.launch(arrayOf("application/pdf", "image/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    if (busy) "Reading…"
+                    else if (loan.schedule.isEmpty()) "Add the payment table from your loan document (lånespecifikation)"
+                    else "Update the payment table from a newer loan document"
+                )
+            }
             TextButton(onClick = { pickStatement.launch(arrayOf("application/pdf", "image/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
                 Text(if (busy) "Reading…" else "Correct the debt with your yearly tax statement (årsopgørelse)")
             }
