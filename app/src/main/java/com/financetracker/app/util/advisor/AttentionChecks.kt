@@ -7,6 +7,7 @@ import com.financetracker.app.data.db.entity.TransactionWithDetails
 import com.financetracker.app.data.prefs.Loan
 import com.financetracker.app.data.prefs.SavingsGoal
 import com.financetracker.app.util.Formatters
+import com.financetracker.app.util.LoanSchedule
 import com.financetracker.app.util.isTransferCategory
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -262,13 +263,26 @@ object AttentionChecks {
 
     private fun loans(input: AttentionInput): List<AttentionItem> = input.loans.flatMap { loan ->
         listOfNotNull(
-            parseDate(loan.nextRateReset)?.takeIf { it - input.now in 0..(60 * DAY) }?.let { reset ->
+            LoanSchedule.nextRateReset(loan, input.now)?.takeIf { loan.remindRateResets && it - input.now in 0..(92 * DAY) }?.let { reset ->
                 AttentionItem(
                     "rate-reset:${loan.id}:$reset", AttentionLevel.INFO,
                     "${loan.name}: interest rate resets ${date(reset)}",
-                    "Your rate will be set again then — a good moment to check whether to keep the loan type.",
+                    "Your rate will be set again then" +
+                        (LoanSchedule.debtOn(loan, reset)?.let { " on about ${money(input, it)} of debt" } ?: "") +
+                        " — a good moment to check whether to keep the loan type.",
                     notify = true,
                     prompt = "The interest rate on my loan \"${loan.name}\" resets on ${date(reset)}. What could happen to my payment, and should I consider switching loan type?"
+                )
+            },
+            loanPaymentDue(input, loan),
+            loanPaymentMissing(input, loan),
+            AttentionChecks.parseDate(loan.discountUntil)?.takeIf { (loan.discountPct ?: 0.0) > 0 && it - input.now in 0..(92 * DAY) }?.let { until ->
+                val name = loan.discountName.ifBlank { "fee discount" }
+                AttentionItem(
+                    "loan-discount:${loan.id}:$until", AttentionLevel.INFO,
+                    "${loan.name}: $name guaranteed until ${date(until)}",
+                    "After that the lender can change or drop the ${loan.discountPct}% discount, so payments may rise.",
+                    notify = true
                 )
             },
             parseDate(loan.interestOnlyUntil)?.takeIf { it - input.now in 0..(180 * DAY) }?.let { end ->
@@ -280,6 +294,38 @@ object AttentionChecks {
                     prompt = "The interest-only period on my loan \"${loan.name}\" ends on ${date(end)}. How much will my payment rise, and how should I prepare?"
                 )
             }
+        )
+    }
+
+    /** A reminder a few days before a loan payment is due. */
+    private fun loanPaymentDue(input: AttentionInput, loan: Loan): AttentionItem? {
+        if (!loan.remindPayments) return null
+        val due = LoanSchedule.nextPaymentDate(loan, input.now) ?: return null
+        if (due - input.now !in -DAY..(3 * DAY)) return null
+        val payment = LoanSchedule.nextPayment(loan, input.now)
+        val detail = payment?.let { p ->
+            "About ${money(input, p.youPay)}: ${money(input, p.interestAndFee - p.discount)} interest & fee, ${money(input, p.principal)} paid off."
+        } ?: loan.monthlyPayment?.let { "About ${money(input, it)}." } ?: "Make sure the money is in the account."
+        return AttentionItem(
+            "loan-payment:${loan.id}:${dayKey(due)}", AttentionLevel.INFO,
+            "${loan.name}: payment due ${date(due)}", detail, notify = true
+        )
+    }
+
+    /** The last scheduled payment can't be found in the bank, though later transactions have synced. */
+    private fun loanPaymentMissing(input: AttentionInput, loan: Loan): AttentionItem? {
+        if (!loan.remindPayments) return null
+        val last = LoanSchedule.lastPayment(loan, input.now) ?: return null
+        if (!LoanSchedule.windowClosed(last, input.now) || input.now - last.date > 45 * DAY) return null
+        val synced = input.transactions.any { it.date > last.date + 7 * DAY }
+        if (!synced || LoanSchedule.findBankPayment(loan, last, input.transactions) != null) return null
+        val lender = loan.lender.ifBlank { "the lender" }
+        return AttentionItem(
+            "loan-missing:${loan.id}:${dayKey(last.date)}", AttentionLevel.WARNING,
+            "${loan.name}: no payment found for ${date(last.date)}",
+            "Expected about ${money(input, last.youPay)} to $lender. Check it went through — or that it's paid from an account the app doesn't see.",
+            notify = true,
+            prompt = "I can't find my ${date(last.date)} payment of about ${money(input, last.youPay)} on my loan \"${loan.name}\" in my transactions. What should I check?"
         )
     }
 

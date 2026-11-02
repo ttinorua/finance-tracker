@@ -22,6 +22,7 @@ import com.financetracker.app.data.repository.FinanceRepository
 import com.financetracker.app.util.advisor.FinanceAnalysis
 import com.financetracker.app.util.advisor.FinanceCalculators
 import com.financetracker.app.util.advisor.GoalTracking
+import com.financetracker.app.util.LoanSchedule
 import com.financetracker.app.util.isTransferCategory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -457,6 +458,9 @@ class AdvisorToolbox(private val snapshot: AdvisorSnapshot) {
             loans.forEach { loan ->
                 val json = LoansAndGoals.loanToJson(loan)
                 if (!withSummaries) json.remove("summary")
+                // The full payment table is long; the advisor gets the key figures instead.
+                json.remove("schedule")
+                LoanSchedule.summary(loan, System.currentTimeMillis())?.let { json.put("schedule_summary", it) }
                 appendLine(compact(json))
             }
             appendLine("Savings goals:")

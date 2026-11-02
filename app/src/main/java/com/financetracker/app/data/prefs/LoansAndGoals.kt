@@ -34,7 +34,45 @@ data class Loan(
     val earlyRepayment: String = "",
     val otherTerms: String = "",
     /** A short English summary of the source document, if the loan was read from one. */
-    val summary: String = ""
+    val summary: String = "",
+    /** The lender's payment table (afdragsforløb), oldest first. Empty when not read from a document. */
+    val schedule: List<LoanPayment> = emptyList(),
+    /** How many payments the document says the loan has in all (e.g. 119), to check the schedule is complete. */
+    val totalPayments: Int? = null,
+    /** Every interest rate reset (rentetilpasning), YYYY-MM-DD. Schedule rows after the first are estimates. */
+    val rateResets: List<String> = emptyList(),
+    /** Day of the month payments are due, and the months (1–12) they're due in. */
+    val paymentDay: Int? = null,
+    val paymentMonths: List<Int> = emptyList(),
+    /** A discount on the fee that the lender's table leaves out, e.g. Totalkredit's KundeKroner:
+     * % a year of the debt, and the date it's guaranteed until. */
+    val discountName: String = "",
+    val discountPct: Double? = null,
+    val discountUntil: String = "",
+    /** Share of interest and fee the user gets back through tax (e.g. 25.83). */
+    val taxDeductionPct: Double? = null,
+    /** One-off costs of taking the loan, and the totals over its whole life (at today's rate). */
+    val setupCosts: Double? = null,
+    val totalInterestAndFees: Double? = null,
+    val totalRepayable: Double? = null,
+    /** ÅOP: yearly cost with all fees included. */
+    val aopPct: Double? = null,
+    val remindPayments: Boolean = true,
+    val remindRateResets: Boolean = true
+)
+
+/** One row of a lender's payment table. Dates are YYYY-MM-DD. */
+data class LoanPayment(
+    val date: String,
+    /** Interest and fee together (rente og bidrag) — what the tax deduction applies to. */
+    val interestAndFee: Double,
+    /** The part that pays down the debt (afdrag). */
+    val principal: Double,
+    /** The whole payment before tax (ydelse før skat). */
+    val payment: Double,
+    val paymentAfterTax: Double?,
+    /** Debt left after this payment (kontantrestgæld). */
+    val debtAfter: Double
 )
 
 data class SavingsGoal(
@@ -111,6 +149,48 @@ object LoansAndGoals {
         .put("rate_type", loan.rateType).put("next_rate_reset", loan.nextRateReset)
         .put("early_repayment", loan.earlyRepayment).put("other_terms", loan.otherTerms)
         .put("summary", loan.summary)
+        .put("schedule", JSONArray(loan.schedule.map(::paymentToJson)))
+        .putOpt("total_payments", loan.totalPayments)
+        .put("rate_resets", JSONArray(loan.rateResets))
+        .putOpt("payment_day", loan.paymentDay)
+        .put("payment_months", JSONArray(loan.paymentMonths))
+        .put("discount_name", loan.discountName).putOpt("discount_pct", loan.discountPct)
+        .put("discount_until", loan.discountUntil).putOpt("tax_deduction_pct", loan.taxDeductionPct)
+        .putOpt("setup_costs", loan.setupCosts).putOpt("total_interest_and_fees", loan.totalInterestAndFees)
+        .putOpt("total_repayable", loan.totalRepayable).putOpt("aop_pct", loan.aopPct)
+        .put("remind_payments", loan.remindPayments).put("remind_rate_resets", loan.remindRateResets)
+
+    /** A schedule row as a compact array: [date, interest and fee, principal, payment, after tax, debt after]. */
+    private fun paymentToJson(row: LoanPayment): JSONArray = JSONArray()
+        .put(row.date).put(row.interestAndFee).put(row.principal).put(row.payment)
+        .put(row.paymentAfterTax ?: JSONObject.NULL).put(row.debtAfter)
+
+    /** Reads a schedule row from the compact array (or an object with the same names). Rows
+     * without a date or the core numbers (e.g. a "Rentetilpasning" marker) are skipped. */
+    private fun paymentFromJson(value: Any?): LoanPayment? {
+        fun num(v: Any?): Double? = when (v) {
+            is Number -> v.toDouble()
+            is String -> v.trim().takeIf { it.isNotEmpty() }?.let { t ->
+                (if (t.contains(',')) t.replace(".", "").replace(',', '.') else t).toDoubleOrNull()
+            }
+            else -> null
+        }?.takeIf { !it.isNaN() }
+        val fields: List<Any?> = when (value) {
+            is JSONArray -> (0 until 6).map { if (it < value.length() && !value.isNull(it)) value.get(it) else null }
+            is JSONObject -> listOf("date", "interest_and_fee", "principal", "payment", "payment_after_tax", "debt_after")
+                .map { if (value.has(it) && !value.isNull(it)) value.get(it) else null }
+            else -> return null
+        }
+        val date = (fields[0] as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return LoanPayment(
+            date = date,
+            interestAndFee = num(fields[1]) ?: return null,
+            principal = num(fields[2]) ?: return null,
+            payment = num(fields[3]) ?: return null,
+            paymentAfterTax = num(fields[4]),
+            debtAfter = num(fields[5]) ?: return null
+        )
+    }
 
     /** Reads a loan from JSON — the app's own format, or what the document reader returns. */
     fun loanFromJson(json: JSONObject, id: String = json.optString("id").ifBlank { UUID.randomUUID().toString() }): Loan {
@@ -124,7 +204,16 @@ object LoansAndGoals {
             monthlyPayment = num("monthly_payment"), yearsLeft = num("years_left"), endDate = text("end_date"),
             interestOnlyUntil = text("interest_only_until"), rateType = text("rate_type"),
             nextRateReset = text("next_rate_reset"), earlyRepayment = text("early_repayment"),
-            otherTerms = text("other_terms"), summary = text("summary")
+            otherTerms = text("other_terms"), summary = text("summary"),
+            schedule = json.optJSONArray("schedule")?.let { rows -> (0 until rows.length()).mapNotNull { paymentFromJson(rows.opt(it)) } }.orEmpty(),
+            totalPayments = num("total_payments")?.toInt(),
+            rateResets = json.optJSONArray("rate_resets")?.let { a -> (0 until a.length()).mapNotNull { a.optString(it).trim().takeIf { d -> d.isNotEmpty() && d != "null" } } }.orEmpty(),
+            paymentDay = num("payment_day")?.toInt()?.takeIf { it in 1..31 },
+            paymentMonths = json.optJSONArray("payment_months")?.let { a -> (0 until a.length()).mapNotNull { a.optInt(it, 0).takeIf { m -> m in 1..12 } } }.orEmpty(),
+            discountName = text("discount_name"), discountPct = num("discount_pct"), discountUntil = text("discount_until"),
+            taxDeductionPct = num("tax_deduction_pct"), setupCosts = num("setup_costs"),
+            totalInterestAndFees = num("total_interest_and_fees"), totalRepayable = num("total_repayable"), aopPct = num("aop_pct"),
+            remindPayments = json.optBoolean("remind_payments", true), remindRateResets = json.optBoolean("remind_rate_resets", true)
         )
     }
 

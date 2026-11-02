@@ -52,6 +52,7 @@ import com.financetracker.app.data.prefs.Loan
 import com.financetracker.app.data.prefs.LoansAndGoals
 import com.financetracker.app.data.prefs.SavingsGoal
 import com.financetracker.app.util.Formatters
+import com.financetracker.app.util.LoanSchedule
 import kotlinx.coroutines.launch
 
 /** Settings > General > My loans & goals: what the AI advisor knows about the user's loans and
@@ -64,6 +65,8 @@ fun LoansAndGoalsSettings(accounts: List<AccountUi>, modifier: Modifier = Modifi
     val goals by LoansAndGoals.goals.collectAsState()
     val currency by CurrencySettings.currencyCode.collectAsState()
     var editingLoan by remember { mutableStateOf<Loan?>(null) }
+    var viewingLoanId by remember { mutableStateOf<String?>(null) }
+    var scheduleOf by remember { mutableStateOf<Loan?>(null) }
     var editingGoal by remember { mutableStateOf<SavingsGoal?>(null) }
     var reading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -94,11 +97,12 @@ fun LoansAndGoalsSettings(accounts: List<AccountUi>, modifier: Modifier = Modifi
             ItemRow(
                 title = loan.name.ifBlank { "Loan" },
                 detail = listOfNotNull(
-                    loan.remainingDebt?.let { "Debt ${Formatters.currency(it, currency)}" },
+                    LoanSchedule.debtNow(loan, System.currentTimeMillis())?.let { "Debt ${Formatters.currency(it, currency)}" },
                     loan.interestRatePct?.let { "$it%" + (loan.contributionRatePct?.let { c -> " + $c%" } ?: "") },
                     loan.monthlyPayment?.let { "${Formatters.currency(it, currency)}/month" }
                 ).joinToString(" · ").ifBlank { loan.lender },
-                onClick = { editingLoan = loan }
+                // A loan with a payment table opens its details page; others go straight to editing.
+                onClick = { if (loan.schedule.isNotEmpty()) viewingLoanId = loan.id else editingLoan = loan }
             )
         }
         goals.forEach { goal ->
@@ -163,10 +167,22 @@ fun LoansAndGoalsSettings(accounts: List<AccountUi>, modifier: Modifier = Modifi
         error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
     }
 
+    viewingLoanId?.let { id -> loans.firstOrNull { it.id == id } }?.let { loan ->
+        LoanDetailsDialog(
+            loan = loan,
+            currency = currency,
+            onEdit = { editingLoan = loan },
+            onChange = { LoansAndGoals.saveLoan(it) },
+            onViewSchedule = { scheduleOf = loan },
+            onDismiss = { viewingLoanId = null }
+        )
+    }
     editingLoan?.let { loan ->
         LoanDialog(
             loan = loan,
             isNew = loans.none { it.id == loan.id },
+            currency = currency,
+            onViewSchedule = { scheduleOf = it },
             onSave = {
                 LoansAndGoals.saveLoan(it)
                 editingLoan = null
@@ -174,10 +190,12 @@ fun LoansAndGoalsSettings(accounts: List<AccountUi>, modifier: Modifier = Modifi
             onDelete = {
                 LoansAndGoals.deleteLoan(loan.id)
                 editingLoan = null
+                viewingLoanId = null
             },
             onDismiss = { editingLoan = null }
         )
     }
+    scheduleOf?.let { loan -> LoanScheduleDialog(loan = loan, currency = currency, onDismiss = { scheduleOf = null }) }
     editingGoal?.let { goal ->
         GoalDialog(
             goal = goal,
@@ -214,7 +232,15 @@ private fun ItemRow(title: String, detail: String, onClick: () -> Unit) {
 private val LOAN_KINDS = listOf("mortgage" to "Mortgage", "bank_loan" to "Bank loan", "car_loan" to "Car loan", "student_loan" to "Student loan", "other" to "Other")
 
 @Composable
-private fun LoanDialog(loan: Loan, isNew: Boolean, onSave: (Loan) -> Unit, onDelete: () -> Unit, onDismiss: () -> Unit) {
+private fun LoanDialog(
+    loan: Loan,
+    isNew: Boolean,
+    currency: String,
+    onViewSchedule: (Loan) -> Unit,
+    onSave: (Loan) -> Unit,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit
+) {
     var draft by remember(loan.id) { mutableStateOf(loan) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -232,6 +258,9 @@ private fun LoanDialog(loan: Loan, isNew: Boolean, onSave: (Loan) -> Unit, onDel
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary
                     )
+                }
+                if (draft.schedule.isNotEmpty()) {
+                    ScheduleCheckCard(draft, currency, onChange = { draft = it }, onView = { onViewSchedule(draft) })
                 }
                 Field("Name", draft.name) { draft = draft.copy(name = it) }
                 Field("Lender", draft.lender) { draft = draft.copy(lender = it) }
@@ -258,6 +287,22 @@ private fun LoanDialog(loan: Loan, isNew: Boolean, onSave: (Loan) -> Unit, onDel
                 NumberField("Years left", draft.yearsLeft) { draft = draft.copy(yearsLeft = it) }
                 Field("Rate type (fixed / variable)", draft.rateType) { draft = draft.copy(rateType = it) }
                 Field("Next rate reset", draft.nextRateReset) { draft = draft.copy(nextRateReset = it) }
+                ListField("All rate resets (YYYY-MM-DD, comma separated)", draft.rateResets.joinToString(", ")) {
+                    draft = draft.copy(rateResets = it.split(',').map(String::trim).filter(String::isNotEmpty))
+                }
+                NumberField("Payment day of month", draft.paymentDay?.toDouble()) { draft = draft.copy(paymentDay = it?.toInt()?.takeIf { d -> d in 1..31 }) }
+                ListField("Payment months (e.g. 3, 6, 9, 12)", draft.paymentMonths.joinToString(", ")) {
+                    draft = draft.copy(paymentMonths = it.split(',', ' ').mapNotNull { m -> m.trim().toIntOrNull()?.takeIf { n -> n in 1..12 } }.distinct())
+                }
+                NumberField("Number of payments in all", draft.totalPayments?.toDouble()) { draft = draft.copy(totalPayments = it?.toInt()) }
+                Field("Fee discount name (e.g. KundeKroner)", draft.discountName) { draft = draft.copy(discountName = it) }
+                NumberField("Fee discount (% a year)", draft.discountPct) { draft = draft.copy(discountPct = it) }
+                Field("Discount guaranteed until", draft.discountUntil) { draft = draft.copy(discountUntil = it) }
+                NumberField("Tax deduction on interest & fee (%)", draft.taxDeductionPct) { draft = draft.copy(taxDeductionPct = it) }
+                NumberField("Setup costs", draft.setupCosts) { draft = draft.copy(setupCosts = it) }
+                NumberField("Interest & fee over the whole loan", draft.totalInterestAndFees) { draft = draft.copy(totalInterestAndFees = it) }
+                NumberField("Total to pay back", draft.totalRepayable) { draft = draft.copy(totalRepayable = it) }
+                NumberField("ÅOP (yearly cost incl. fees, %)", draft.aopPct) { draft = draft.copy(aopPct = it) }
                 Field("Interest-only until", draft.interestOnlyUntil) { draft = draft.copy(interestOnlyUntil = it) }
                 Field("Ends", draft.endDate) { draft = draft.copy(endDate = it) }
                 Field("Early repayment terms", draft.earlyRepayment, singleLine = false) { draft = draft.copy(earlyRepayment = it) }
@@ -383,6 +428,16 @@ private fun Field(label: String, value: String, singleLine: Boolean = true, onCh
         singleLine = singleLine,
         modifier = Modifier.fillMaxWidth()
     )
+}
+
+/** A comma-separated list: keeps what's typed (separators included) while the parsed value updates. */
+@Composable
+private fun ListField(label: String, initial: String, onChange: (String) -> Unit) {
+    var text by remember { mutableStateOf(initial) }
+    Field(label, text) {
+        text = it
+        onChange(it)
+    }
 }
 
 /** A number field that accepts both 1234.5 and Danish 1.234,5. */
