@@ -10,6 +10,8 @@ import com.financetracker.app.data.ai.AiSettings
 import com.financetracker.app.data.db.AppDatabase
 import com.financetracker.app.data.enablebanking.EnableBankingCredentials
 import com.financetracker.app.data.enablebanking.EnableBankingSyncWorker
+import com.financetracker.app.data.stores.StoreAccounts
+import com.financetracker.app.data.stores.StoreSync
 import kotlin.system.exitProcess
 
 /**
@@ -54,6 +56,8 @@ object FullBackup {
             accounts = db.accountDao().getAll(),
             categories = db.categoryDao().getAll(),
             transactions = db.transactionDao().getAll(),
+            receipts = db.receiptDao().getAllReceipts(),
+            receiptItems = db.receiptDao().getAllItems(),
             prefs = prefs,
             includesBankConnections = includeBankConnections && prefs.keys.any { it in BANK_CONNECTION_KEYS }
         )
@@ -69,12 +73,15 @@ object FullBackup {
 
         val db = AppDatabase.getInstance(context)
         db.withTransaction {
+            db.receiptDao().deleteAll()
             db.transactionDao().deleteAll()
             db.categoryDao().deleteAll()
             db.accountDao().deleteAll()
             contents.accounts.forEach { db.accountDao().insert(it) }
             contents.categories.forEach { db.categoryDao().insert(it) }
             contents.transactions.chunked(500).forEach { db.transactionDao().insertAll(it) }
+            contents.receipts.forEach { db.receiptDao().insertReceipt(it) }
+            contents.receiptItems.chunked(500).forEach { db.receiptDao().insertItems(it) }
         }
 
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -96,6 +103,12 @@ object FullBackup {
             }
         }
         editor.commit()
+
+        // Store connections aren't part of a backup, so they still remember their last fetch and
+        // would only look back from there. Fetch the last 12 months again instead; receipts
+        // already in the app are skipped.
+        StoreAccounts.resetFetchDates(context)
+        StoreSync.enqueue(context)
     }
 
     /** Writes a fresh full backup to [uri], encrypted with [password] (which also includes the

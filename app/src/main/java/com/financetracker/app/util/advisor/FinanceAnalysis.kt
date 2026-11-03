@@ -105,9 +105,24 @@ object FinanceAnalysis {
         val previousAmount: Double?,
         val occurrences: Int,
         val category: String?,
-        val firstDate: Long = lastDate
+        val firstDate: Long = lastDate,
+        val categoryId: Long? = null,
+        val accountName: String? = null
     ) {
         val yearlyCost: Double get() = lastAmount * cadence.perYear
+        /** What it costs per month, with quarterly and yearly bills spread out. */
+        val monthlyCost: Double get() = yearlyCost / 12
+        /** The next expected payment: the last one plus one interval, in calendar units. */
+        val nextDue: Long get() {
+            val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply { timeInMillis = lastDate }
+            when (cadence) {
+                Cadence.WEEKLY -> cal.add(java.util.Calendar.DAY_OF_MONTH, 7)
+                Cadence.MONTHLY -> cal.add(java.util.Calendar.MONTH, 1)
+                Cadence.QUARTERLY -> cal.add(java.util.Calendar.MONTH, 3)
+                Cadence.YEARLY -> cal.add(java.util.Calendar.YEAR, 1)
+            }
+            return cal.timeInMillis
+        }
         val priceChangePct: Double? get() = previousAmount?.takeIf { it > 0 }?.let { (lastAmount - it) / it * 100 }
     }
 
@@ -142,7 +157,9 @@ object FinanceAnalysis {
                 previousAmount = previous,
                 occurrences = sorted.size,
                 category = last.categoryName,
-                firstDate = sorted.first().date
+                firstDate = sorted.first().date,
+                categoryId = last.categoryId,
+                accountName = last.accountName
             )
         }.sortedByDescending { it.yearlyCost }
     }

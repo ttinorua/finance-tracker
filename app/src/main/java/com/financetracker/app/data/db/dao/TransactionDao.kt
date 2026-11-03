@@ -12,6 +12,9 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface TransactionDao {
+    @Query("UPDATE transactions SET categoryId = :toId WHERE categoryId = :fromId")
+    suspend fun moveCategory(fromId: Long, toId: Long)
+
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(transaction: Transaction): Long

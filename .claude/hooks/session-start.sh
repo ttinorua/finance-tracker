@@ -37,6 +37,27 @@ if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
   echo "export ANDROID_HOME=$SDK_ROOT" >> "$CLAUDE_ENV_FILE"
 fi
 
-# Download Gradle and the project's plugins/dependencies now, so the cached container starts warm.
+# Download Gradle and the project's plugins now.
 cd "$CLAUDE_PROJECT_DIR"
 ./gradlew --quiet help >/dev/null
+
+# Early fetch: each cloud session starts on a fresh machine, so the app's libraries still have to
+# be downloaded and prepared (about 20 minutes of a build). Start that in the background now, so
+# it's done or well underway by the time a build or test is asked for, and Gradle reuses the
+# result. Don't run a build alongside it (both fail): wait for the status file below. Maven Central sometimes
+# answers HTTP 429 (too many requests), so retry with growing pauses. Log: /tmp/gradle-warmup.log.
+# When it ends (done or given up), it writes "done" or "failed" to /tmp/gradle-warmup.status;
+# builds should wait for that file before starting, so the two don't run over each other.
+# No secrets are needed or printed: it only compiles, and converts the libraries for the release APK.
+WARMUP_TASKS="compileDebugUnitTestKotlin mergeExtDexRelease"
+rm -f /tmp/gradle-warmup.status
+nohup setsid bash -c "
+  pause=30
+  for i in 1 2 3 4 5; do
+    if env -u ANTHROPIC_API_KEY ./gradlew --console=plain $WARMUP_TASKS; then
+      echo 'warm-up done'; echo done > /tmp/gradle-warmup.status; exit 0
+    fi
+    echo \"warm-up attempt \$i failed; retrying in \$pause s\"; sleep \$pause; pause=\$((pause * 2))
+  done
+  echo failed > /tmp/gradle-warmup.status
+" >/tmp/gradle-warmup.log 2>&1 < /dev/null &

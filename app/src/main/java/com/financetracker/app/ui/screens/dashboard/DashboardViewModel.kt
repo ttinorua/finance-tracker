@@ -1,5 +1,7 @@
 package com.financetracker.app.ui.screens.dashboard
 
+import com.financetracker.app.data.ai.WeeklySummary
+import com.financetracker.app.data.prefs.ViewFilter
 import com.financetracker.app.data.advisor.AttentionMonitor
 import com.financetracker.app.data.prefs.LoansAndGoals
 import com.financetracker.app.util.advisor.AttentionItem
@@ -11,14 +13,11 @@ import androidx.lifecycle.viewModelScope
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.financetracker.app.data.ai.AiService
-import com.financetracker.app.data.ai.InsightCard
-import com.financetracker.app.data.ai.InsightTone
 import com.financetracker.app.data.db.entity.Account
 import com.financetracker.app.data.db.entity.Category
 import com.financetracker.app.data.db.entity.CategorySpend
 import com.financetracker.app.data.db.entity.TransactionType
 import com.financetracker.app.data.enablebanking.EnableBankingSyncWorker
-import com.financetracker.app.data.prefs.AiInsightsCache
 import com.financetracker.app.data.prefs.BankScheduledPayments
 import com.financetracker.app.data.prefs.BudgetLimits
 import com.financetracker.app.data.prefs.BudgetSettings
@@ -26,6 +25,7 @@ import com.financetracker.app.data.prefs.CurrencySettings
 import com.financetracker.app.data.prefs.DismissedRecurringExpenses
 import com.financetracker.app.data.prefs.EnableBankingPrefs
 import com.financetracker.app.data.prefs.FixedExpenseCategories
+import com.financetracker.app.data.prefs.FixedMerchants
 import com.financetracker.app.data.prefs.MainAccountSettings
 import com.financetracker.app.data.prefs.ScheduledPayment
 import com.financetracker.app.data.prefs.toTransactionDetails
@@ -33,6 +33,9 @@ import com.financetracker.app.data.repository.FinanceRepository
 import com.financetracker.app.util.PeriodOption
 import com.financetracker.app.util.anticipatedRecurringExpenses
 import com.financetracker.app.util.countsTowardTotals
+import com.financetracker.app.util.dailyBalances
+import com.financetracker.app.util.percentChange
+import com.financetracker.app.util.todayUtcMidnight
 import com.financetracker.app.util.transfersInCountAsIncome
 import com.financetracker.app.util.effectiveReportingDate
 import com.financetracker.app.util.periodRange
@@ -75,7 +78,11 @@ data class DashboardUiState(
     /** All-time (not scoped to [periodOption]) count of transactions with no category at all,
      * respecting [selectedAccountId] — a cleanup backlog, not a spending metric, so an old
      * uncategorized transaction is just as worth surfacing as a new one. */
-    val uncategorizedCount: Int = 0
+    val uncategorizedCount: Int = 0,
+    /** The balance at the end of each of the last 30 days, ending with [netBalance]. */
+    val balanceTrend: List<Double> = emptyList(),
+    /** How much [netBalance] changed over [balanceTrend], in percent; null when it can't be said. */
+    val balanceChange: Double? = null
 )
 
 private data class DashboardFilters(
@@ -106,14 +113,12 @@ private data class DashboardExtras(
 
 class DashboardViewModel(private val repository: FinanceRepository, appContext: Context) : ViewModel() {
 
-    private val _periodOption = MutableStateFlow(PeriodOption.THIS_MONTH)
-    private val _customRange = MutableStateFlow<Pair<Long, Long>?>(null)
-    private val _selectedAccountId = MutableStateFlow(MainAccountSettings.mainAccountId.value)
+    // Shared with Activity, Spending and Trends, and remembered (see ViewFilter).
+    private val _periodOption = ViewFilter.period
+    private val _customRange = ViewFilter.customRange
+    private val _selectedAccountId = ViewFilter.accountId
 
     init {
-        viewModelScope.launch {
-            MainAccountSettings.mainAccountId.drop(1).collect { _selectedAccountId.value = it }
-        }
         // Keeps "Needs your attention" current as transactions, budgets and goals change.
         viewModelScope.launch {
             combine(
@@ -132,6 +137,10 @@ class DashboardViewModel(private val repository: FinanceRepository, appContext: 
     val attentionItems: StateFlow<List<AttentionItem>> = AttentionMonitor.items
 
     fun dismissAttention(key: String) = AttentionMonitor.dismiss(key)
+
+    fun performAttention(item: AttentionItem) {
+        viewModelScope.launch { runCatching { AttentionMonitor.perform(repository, item) } }
+    }
 
     /** Whether a bank sync ([EnableBankingSyncWorker]) is currently running — read straight from
      * WorkManager (not tied to any particular screen's lifecycle) so the header's sync spinner
@@ -171,7 +180,8 @@ class DashboardViewModel(private val repository: FinanceRepository, appContext: 
             },
             BudgetLimits.categoryBudgets,
             DismissedRecurringExpenses.dismissed,
-            FixedExpenseCategories.fixedCategoryIds,
+            // Also recomputes when a merchant is marked fixed (read below via FixedMerchants).
+            FixedExpenseCategories.fixedCategoryIds.combine(FixedMerchants.merchants) { ids, _ -> ids },
             BankScheduledPayments.payments
         ) { partial, categoryBudgets, dismissedRecurring, fixedCategoryIds, scheduledPayments ->
             DashboardExtras(
@@ -207,6 +217,11 @@ class DashboardViewModel(private val repository: FinanceRepository, appContext: 
             accounts.sumOf { it.initialBalance } +
                 allTransactions.sumOf { if (it.type == TransactionType.INCOME) it.amount else -it.amount }
         }
+        val balanceTrend = dailyBalances(
+            netBalance,
+            transactions.map { it.date to if (it.type == TransactionType.INCOME) it.amount else -it.amount },
+            todayUtcMidnight()
+        )
         val (from, to) = periodRange(periodOption, customRange)
         val inPeriod = transactions.filter {
             val effectiveDate =
@@ -238,7 +253,8 @@ class DashboardViewModel(private val repository: FinanceRepository, appContext: 
                 scheduled = scheduledPayments
                     .filter { selectedAccountId == null || it.accountId == selectedAccountId }
                     .map { it.toTransactionDetails(categoriesById) },
-                excludeTransfers = excludeTransfers
+                excludeTransfers = excludeTransfers,
+                fixedMerchants = FixedMerchants.merchants.value
             ).sumOf { it.amount }
         } else {
             0.0
@@ -297,7 +313,9 @@ class DashboardViewModel(private val repository: FinanceRepository, appContext: 
             ),
             accounts = accounts,
             selectedAccountId = selectedAccountId,
-            uncategorizedCount = uncategorizedCount
+            uncategorizedCount = uncategorizedCount,
+            balanceTrend = balanceTrend,
+            balanceChange = percentChange(balanceTrend)
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DashboardUiState())
 
@@ -305,75 +323,33 @@ class DashboardViewModel(private val repository: FinanceRepository, appContext: 
         _periodOption.value = option
     }
 
-    fun selectCustomRange(start: Long, endExclusive: Long) {
-        _customRange.value = start to endExclusive
-        _periodOption.value = PeriodOption.CUSTOM
-    }
+    fun selectCustomRange(start: Long, endExclusive: Long) = ViewFilter.selectCustomRange(start, endExclusive)
 
     fun selectAccount(accountId: Long?) {
         _selectedAccountId.value = accountId
     }
 
-    private val _isGeneratingInsights = MutableStateFlow(false)
-    val isGeneratingInsights: StateFlow<Boolean> = _isGeneratingInsights.asStateFlow()
+    private val _isMakingSummary = MutableStateFlow(false)
+    val isMakingSummary: StateFlow<Boolean> = _isMakingSummary.asStateFlow()
+    private val _summaryError = MutableStateFlow<String?>(null)
+    val summaryError: StateFlow<String?> = _summaryError.asStateFlow()
 
-    fun generateInsights() {
-        if (_isGeneratingInsights.value) return
-        _isGeneratingInsights.value = true
-
+    /** "Refresh now" on the AI summary card: a summary of the period and account on screen. */
+    fun refreshSummary() {
+        if (_isMakingSummary.value) return
+        _isMakingSummary.value = true
+        _summaryError.value = null
         viewModelScope.launch {
-            val current = uiState.value
-            val currencyCode = CurrencySettings.currencyCode.value
-            val systemPrompt =
-                "You are a friendly personal finance assistant embedded in the user's finance-tracking app. " +
-                    "Identify 2-4 specific, useful observations about their spending this period using the " +
-                    "numbers provided, and present them via the present_insights tool. Be concrete with " +
-                    "amounts and category names. Avoid generic advice like 'track your spending' or " +
-                    "'create a budget'."
-            val summary = buildString {
-                appendLine("Currency: $currencyCode")
-                appendLine("Period income: ${current.periodIncome}")
-                appendLine("Period expense: ${current.periodExpense}")
-                appendLine("Spending by category (mainCategory / category: total):")
-                current.categoryBreakdown.forEach {
-                    appendLine("- ${it.mainCategory} / ${it.categoryName}: ${it.total}")
-                }
-            }
-
-            AiService.generateInsights(systemPrompt, summary, maxTokens = 600L)
-                .onSuccess { cards ->
-                    AiInsightsCache.save(
-                        cards.ifEmpty {
-                            listOf(
-                                InsightCard(
-                                    label = "Insights",
-                                    value = "—",
-                                    detail = "Couldn't generate insights this time — try again.",
-                                    tone = InsightTone.NEUTRAL
-                                )
-                            )
-                        }
-                    )
-                }
-                .onFailure { error ->
-                    AiInsightsCache.save(
-                        listOf(
-                            InsightCard(
-                                label = "Insights",
-                                value = "—",
-                                detail = "Couldn't generate insights: ${error.message}",
-                                tone = InsightTone.WARNING
-                            )
-                        )
-                    )
-                }
-            _isGeneratingInsights.value = false
+            val period = ViewFilter.period.value
+            val (from, to) = periodRange(period, ViewFilter.customRange.value)
+            runCatching {
+                WeeklySummary.make(repository, ViewFilter.accountId.value, from, to, period.label, automatic = false)
+            }.onFailure { _summaryError.value = "Couldn't make a summary: ${it.message}" }
+            _isMakingSummary.value = false
         }
     }
 
-    fun dismissInsights() {
-        AiInsightsCache.clear()
-    }
+    fun hideSummary() = WeeklySummary.hide()
 }
 
 /** For a specific account, its own budget. For "All accounts" (null), the combined total of

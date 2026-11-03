@@ -25,13 +25,14 @@ data class DefaultCategorySeed(
  * name — only [aspspName] has to match Enable Banking's registry exactly, since it's sent
  * verbatim in the `/auth` request's `aspsp.name` field to select which bank's consent flow to
  * start. If a bank stops resolving, re-check its current registry entry rather than assuming
- * the branding name is still right.
+ * the branding name is still right. [logoDomain] is the bank's website, used only to show its logo.
  */
 data class Bank(
     val id: String,
     val displayName: String,
     val aspspName: String,
     val aspspCountry: String,
+    val logoDomain: String,
     val defaultCategories: List<DefaultCategorySeed>
 )
 
@@ -41,6 +42,7 @@ object SupportedBanks {
         displayName = "Sydbank",
         aspspName = "Sydbank",
         aspspCountry = "DK",
+        logoDomain = "sydbank.dk",
         defaultCategories = BankdataDefaultCategories.ALL
     )
 
@@ -50,6 +52,7 @@ object SupportedBanks {
         displayName = "SJF Bank",
         aspspName = "Sparekassen Sjælland-Fyn",
         aspspCountry = "DK",
+        logoDomain = "sjfbank.dk",
         defaultCategories = BankdataDefaultCategories.ALL
     )
 
@@ -64,6 +67,7 @@ object SupportedBanks {
         displayName = "Lunar",
         aspspName = "Lunar",
         aspspCountry = "DK",
+        logoDomain = "lunar.app",
         defaultCategories = BankdataDefaultCategories.ALL
     )
 

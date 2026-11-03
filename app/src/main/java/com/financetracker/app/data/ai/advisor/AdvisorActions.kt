@@ -1,6 +1,10 @@
 package com.financetracker.app.data.ai.advisor
 
+import com.financetracker.app.data.prefs.WeeklySummarySettings
+import com.financetracker.app.data.prefs.UserAlerts
+import com.financetracker.app.data.prefs.UserAlert
 import com.financetracker.app.data.db.entity.Category
+import com.financetracker.app.util.CategoryNames
 import com.financetracker.app.data.db.entity.TransactionWithDetails
 import com.financetracker.app.data.prefs.BudgetLimits
 import com.financetracker.app.data.prefs.FixedExpenseCategories
@@ -13,6 +17,13 @@ import kotlinx.coroutines.flow.first
 /** A change the advisor prepared. Nothing happens until the user taps Apply on its card; each
  * plan records what it replaced so Undo can put it back. */
 sealed interface ActionPlan {
+
+    /** Adds (or replaces, same id) an alert the app checks itself. */
+    data class SaveAlert(val alert: UserAlert) : ActionPlan
+
+    data class RemoveAlert(val alert: UserAlert) : ActionPlan
+
+    data class SetWeeklySummary(val enabled: Boolean) : ActionPlan
 
     /** Moves transactions to a category. [newCategory] is created on Apply when the target
      * doesn't exist yet (its transactions then have a null [Assignment.categoryId]). */
@@ -44,6 +55,10 @@ sealed interface UndoInfo {
     data class Budgets(val accountId: Long?, val overall: Double?, val restoreOverall: Boolean, val categories: Map<Long, Double?>) : UndoInfo
     data class Fixed(val previous: Map<Long, Boolean>) : UndoInfo
     data class CreatedCategory(val id: Long) : UndoInfo
+    data class Alert(val previous: UserAlert?, val id: String) : UndoInfo
+    data class WeeklySummary(val previous: Boolean) : UndoInfo
+    /** Apply changed nothing, so there's nothing to put back. */
+    data object Nothing : UndoInfo
     data class Loans(val previous: Loan?, val id: String) : UndoInfo
     data class Goals(val previous: SavingsGoal?, val id: String) : UndoInfo
 }
@@ -71,9 +86,7 @@ object AdvisorActions {
         is ActionPlan.Recategorize -> {
             var createdId: Long? = null
             val newId = plan.newCategory?.let { new ->
-                val existing = repository.getCategories().firstOrNull {
-                    it.mainCategory.equals(new.mainCategory, true) && it.name.equals(new.name, true) && it.type == new.type
-                }
+                val existing = CategoryNames.existing(repository.getCategories(), new.name, new.type)
                 existing?.id ?: repository.upsertCategory(new).also { createdId = it }
             }
             val previous = mutableMapOf<Long, Long?>()
@@ -101,9 +114,31 @@ object AdvisorActions {
             plan.changes.forEach { (id, fixed) -> FixedExpenseCategories.setFixed(id, fixed) }
             "Fixed costs updated." to UndoInfo.Fixed(previous)
         }
+        is ActionPlan.SaveAlert -> {
+            val previous = UserAlerts.alerts.value.firstOrNull { it.id == plan.alert.id }
+            UserAlerts.save(plan.alert)
+            "Alert saved. You'll get a notification when it's reached." to UndoInfo.Alert(previous, plan.alert.id)
+        }
+        is ActionPlan.RemoveAlert -> {
+            UserAlerts.remove(plan.alert.id)
+            "Alert removed." to UndoInfo.Alert(plan.alert, plan.alert.id)
+        }
+        is ActionPlan.SetWeeklySummary -> {
+            val previous = WeeklySummarySettings.enabled.value
+            WeeklySummarySettings.setEnabled(plan.enabled)
+            (if (plan.enabled) "Weekly summary on: Sundays at 18:00." else "Weekly summary off.") to UndoInfo.WeeklySummary(previous)
+        }
         is ActionPlan.CreateCategory -> {
-            val id = repository.upsertCategory(plan.category)
-            "Category created." to UndoInfo.CreatedCategory(id)
+            // Checked again here: the same category may have been added since the card was made
+            // (a second card, or an earlier Apply).
+            val existing = CategoryNames.existing(repository.getCategories(), plan.category.name, plan.category.type)
+            if (existing != null) {
+                "Already there as ${existing.mainCategory} › ${existing.name}, so nothing was added." to UndoInfo.Nothing
+            } else {
+                val main = CategoryNames.canonicalMain(repository.getCategories(), plan.category.mainCategory)
+                val id = repository.upsertCategory(plan.category.copy(mainCategory = main))
+                "Category created." to UndoInfo.CreatedCategory(id)
+            }
         }
         is ActionPlan.SaveLoan -> {
             val previous = LoansAndGoals.loans.value.firstOrNull { it.id == plan.loan.id }
@@ -133,6 +168,15 @@ object AdvisorActions {
         }
         is UndoInfo.Fixed -> {
             undo.previous.forEach { (id, fixed) -> FixedExpenseCategories.setFixed(id, fixed) }
+            "Undone."
+        }
+        UndoInfo.Nothing -> "Nothing to undo."
+        is UndoInfo.Alert -> {
+            if (undo.previous != null) UserAlerts.save(undo.previous) else UserAlerts.remove(undo.id)
+            "Undone."
+        }
+        is UndoInfo.WeeklySummary -> {
+            WeeklySummarySettings.setEnabled(undo.previous)
             "Undone."
         }
         is UndoInfo.CreatedCategory ->

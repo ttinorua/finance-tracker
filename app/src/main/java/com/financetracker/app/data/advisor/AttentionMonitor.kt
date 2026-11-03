@@ -25,19 +25,28 @@ import com.financetracker.app.R
 import com.financetracker.app.data.backup.AutoBackupSettings
 import com.financetracker.app.data.bank.LegacyCategories
 import com.financetracker.app.data.bank.SupportedBanks
+import com.financetracker.app.data.household.HouseholdSync
 import com.financetracker.app.data.prefs.BudgetLimits
 import com.financetracker.app.data.prefs.BudgetSettings
 import com.financetracker.app.data.prefs.CurrencySettings
 import com.financetracker.app.data.prefs.EnableBankingPrefs
 import com.financetracker.app.data.prefs.FixedExpenseCategories
+import com.financetracker.app.data.prefs.FixedMerchants
 import com.financetracker.app.data.prefs.LoansAndGoals
 import com.financetracker.app.data.prefs.MainAccountSettings
+import com.financetracker.app.data.prefs.SharedBillsSettings
+import com.financetracker.app.data.prefs.UserAlerts
 import com.financetracker.app.data.repository.FinanceRepository
+import com.financetracker.app.util.Mortgage
+import com.financetracker.app.util.SharedBills
+import com.financetracker.app.util.SharedBillsInput
+import com.financetracker.app.util.advisor.AttentionActionKind
 import com.financetracker.app.util.advisor.AttentionChecks
 import com.financetracker.app.util.advisor.AttentionInput
 import com.financetracker.app.util.advisor.AttentionItem
 import com.financetracker.app.util.advisor.AttentionLevel
 import com.financetracker.app.util.advisor.BankConsent
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,7 +55,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import java.util.concurrent.TimeUnit
 
 /**
  * Runs [AttentionChecks] for the Dashboard's "Needs your attention" section and the phone
@@ -103,7 +111,29 @@ object AttentionMonitor {
     fun dismiss(key: String) {
         prefs.edit().putStringSet(KEY_DISMISSED, remember(KEY_DISMISSED, listOf(key))).apply()
         _items.value = _items.value.filterNot { it.key == key }
+        _dismissals.value++
     }
+
+    /** Carries out an attention card's one-tap fix, then drops the card and refreshes. */
+    suspend fun perform(repository: FinanceRepository, item: AttentionItem) {
+        val action = item.action ?: return
+        when (action.kind) {
+            AttentionActionKind.MARK_TRANSFER -> action.transactionIds.forEach { id ->
+                val tx = repository.getTransaction(id) ?: return@forEach
+                val category = repository.getOrCreateCategory("Other", "Other (Transfer)", tx.type, "#D32F2F")
+                repository.updateTransaction(tx.copy(categoryId = category.id))
+            }
+            AttentionActionKind.MARK_FIXED_MERCHANT -> action.text?.let { FixedMerchants.setFixed(it, true) }
+        }
+        dismiss(item.key)
+        refresh(repository, seen = true)
+    }
+
+    private val _dismissals = MutableStateFlow(0)
+    /** Bumps on every dismissal, for items shown alongside [items] (e.g. the household budget's). */
+    val dismissals: StateFlow<Int> = _dismissals.asStateFlow()
+
+    fun isDismissed(key: String): Boolean = prefs.getStringSet(KEY_DISMISSED, emptySet()).orEmpty().contains(key)
 
     /** Called by the bank sync: a failure shows as an item until a later sync succeeds. */
     fun recordSyncResult(context: Context, failure: String?) {
@@ -146,10 +176,28 @@ object AttentionMonitor {
             balances[goal.accountId]?.let { LoansAndGoals.restoreGoal(goal.copy(startAmount = it, startedAt = goal.startedAt ?: System.currentTimeMillis())) }
         }
         val backup = AutoBackupSettings.state.value
+        val transactions = repository.observeTransactions().first()
+        val now = System.currentTimeMillis()
+        // A loan's first payment links itself once it arrives (then it's no longer "planned").
+        LoansAndGoals.loans.value.forEach { loan ->
+            Mortgage.findFirstPayment(loan, transactions, now)?.let { LoansAndGoals.saveLoan(loan.copy(paymentMerchant = it, debtAsOf = loan.debtAsOf ?: now)) }
+        }
+        val shared = SharedBillsSettings.setup.value
+        val sharedStatus = shared.accountId?.let { id -> accounts.firstOrNull { it.id == id } }?.let { account ->
+            SharedBills.status(
+                SharedBillsInput(
+                    account.id, transactions, balances[account.id] ?: 0.0, SharedBills.averageNetSalary(transactions, now),
+                    shared.partnerNetIncome, shared.partnerName, shared.answers, shared.sharedMerchants, FixedMerchants.merchants.value,
+                    shared.partnerBills, shared.lockedMySharePct, shared.startedAt, shared.history,
+                    HouseholdSync.state.value.partnerSharedBills?.side, now,
+                    Mortgage.plannedBills(LoansAndGoals.loans.value, account.id, now)
+                )
+            ).also { if (it.hasTarget) SharedBillsSettings.recordMonth(SharedBills.monthKey(now), it.myTarget, it.partnerTarget) }
+        }
         return AttentionInput(
-            now = System.currentTimeMillis(),
+            now = now,
             currency = CurrencySettings.currencyCode.value,
-            transactions = repository.observeTransactions().first(),
+            transactions = transactions,
             accounts = accounts,
             balances = balances,
             categories = categories,
@@ -168,7 +216,14 @@ object AttentionMonitor {
             lastSyncFailure = prefs.getString(KEY_SYNC_FAILURE, null),
             backupEnabled = backup.enabled,
             backupLastSuccessAt = backup.lastSuccessAt,
-            backupLastError = backup.lastError
+            backupLastError = backup.lastError,
+            userAlerts = UserAlerts.alerts.value,
+            fixedMerchants = FixedMerchants.merchants.value,
+            sharedBills = sharedStatus,
+            partnerName = shared.partnerName,
+            partnerIncomeUpdatedAt = shared.partnerIncomeUpdatedAt,
+            // A shared loan paid from the partner's bills account: its balance as their phone shares it.
+            sharedAccount = HouseholdSync.state.value.partnerSharedBills?.snapshot?.ahead?.let { it.accountName to it.balance }
         )
     }
 

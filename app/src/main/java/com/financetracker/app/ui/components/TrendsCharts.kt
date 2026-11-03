@@ -38,6 +38,8 @@ fun NetTrendChart(trends: List<TrendPoint>, onBarClick: (Int) -> Unit, modifier:
     val labelStyle = TextStyle(fontSize = 9.sp, color = axisColor)
     val currentOnBarClick by rememberUpdatedState(onBarClick)
 
+    val positiveColor = IncomeGreen
+    val negativeColor = ExpenseRed
     Canvas(
         modifier = modifier
             .fillMaxWidth()
@@ -77,7 +79,7 @@ fun NetTrendChart(trends: List<TrendPoint>, onBarClick: (Int) -> Unit, modifier:
         val barW = (plotW / n) * 0.46f
         trends.forEachIndexed { i, t ->
             val h = barHeight(t.net).coerceAtLeast(3f)
-            val color = if (t.net >= 0) IncomeGreen else ExpenseRed
+            val color = if (t.net >= 0) positiveColor else negativeColor
             val top = if (t.net >= 0) zeroY - h else zeroY
             drawRoundRect(
                 color = color,

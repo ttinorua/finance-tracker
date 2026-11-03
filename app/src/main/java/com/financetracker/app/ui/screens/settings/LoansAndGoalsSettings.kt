@@ -1,5 +1,12 @@
 package com.financetracker.app.ui.screens.settings
 
+import com.financetracker.app.util.Mortgage
+import com.financetracker.app.data.prefs.SharedBillsSettings
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.filled.Delete
+import com.financetracker.app.data.prefs.WeeklySummarySettings
+import com.financetracker.app.data.prefs.UserAlerts
+import com.financetracker.app.data.prefs.AlertKind
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -57,7 +64,7 @@ import kotlinx.coroutines.launch
 /** Settings > General > My loans & goals: what the AI advisor knows about the user's loans and
  * savings goals. A loan can be typed in or read from its (Danish) document by the AI. */
 @Composable
-fun LoansAndGoalsSettings(accounts: List<AccountUi>, modifier: Modifier = Modifier) {
+fun LoansAndGoalsSettings(accounts: List<AccountUi>, modifier: Modifier = Modifier, onOpenMortgage: (String) -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val loans by LoansAndGoals.loans.collectAsState()
@@ -96,9 +103,14 @@ fun LoansAndGoalsSettings(accounts: List<AccountUi>, modifier: Modifier = Modifi
                 detail = listOfNotNull(
                     loan.remainingDebt?.let { "Debt ${Formatters.currency(it, currency)}" },
                     loan.interestRatePct?.let { "$it%" + (loan.contributionRatePct?.let { c -> " + $c%" } ?: "") },
-                    loan.monthlyPayment?.let { "${Formatters.currency(it, currency)}/month" }
+                    loan.monthlyPayment?.let { "${Formatters.currency(it, currency)}/month" },
+                    Mortgage.nextPayment(loan, System.currentTimeMillis())?.let { (due, amount) ->
+                        "next ${Formatters.date(due)} ≈ ${Formatters.currency(amount, currency)}"
+                    },
+                    loan.sharedBy.takeIf { it.isNotBlank() }?.let { "shared by $it" } ?: if (loan.sharedWithHousehold) "shared" else null
                 ).joinToString(" · ").ifBlank { loan.lender },
-                onClick = { editingLoan = loan }
+                // A mortgage opens its page (with Edit there); other loans open the editor.
+                onClick = { if (loan.kind == "mortgage") onOpenMortgage(loan.id) else editingLoan = loan }
             )
         }
         goals.forEach { goal ->
@@ -166,9 +178,10 @@ fun LoansAndGoalsSettings(accounts: List<AccountUi>, modifier: Modifier = Modifi
     editingLoan?.let { loan ->
         LoanDialog(
             loan = loan,
+            accounts = accounts,
             isNew = loans.none { it.id == loan.id },
             onSave = {
-                LoansAndGoals.saveLoan(it)
+                saveEditedLoan(loans, it)
                 editingLoan = null
             },
             onDelete = {
@@ -213,9 +226,23 @@ private fun ItemRow(title: String, detail: String, onClick: () -> Unit) {
 
 private val LOAN_KINDS = listOf("mortgage" to "Mortgage", "bank_loan" to "Bank loan", "car_loan" to "Car loan", "student_loan" to "Student loan", "other" to "Other")
 
+/** Saves a loan from the editor: a newly typed debt is the new exact figure the mortgage estimate starts from. */
+internal fun saveEditedLoan(loans: List<Loan>, loan: Loan) {
+    val previous = loans.firstOrNull { it.id == loan.id }
+    val debtChanged = previous == null || previous.remainingDebt != loan.remainingDebt
+    LoansAndGoals.saveLoan(if (debtChanged && loan.remainingDebt != null) loan.copy(debtAsOf = System.currentTimeMillis()) else loan)
+}
+
 @Composable
-private fun LoanDialog(loan: Loan, isNew: Boolean, onSave: (Loan) -> Unit, onDelete: () -> Unit, onDismiss: () -> Unit) {
-    var draft by remember(loan.id) { mutableStateOf(loan) }
+internal fun LoanDialog(loan: Loan, accounts: List<AccountUi>, isNew: Boolean, onSave: (Loan) -> Unit, onDelete: () -> Unit, onDismiss: () -> Unit) {
+    // A new mortgage is paid from the shared bills account, when there is one.
+    var draft by remember(loan.id) {
+        mutableStateOf(
+            if (isNew && loan.kind == "mortgage" && loan.paidFromAccountId == null) loan.copy(paidFromAccountId = SharedBillsSettings.setup.value.accountId)
+            else loan
+        )
+    }
+    val currency by CurrencySettings.currencyCode.collectAsState()
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (isNew) "Loan" else "Edit loan") },
@@ -232,6 +259,12 @@ private fun LoanDialog(loan: Loan, isNew: Boolean, onSave: (Loan) -> Unit, onDel
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary
                     )
+                }
+                if (draft.schedule.isNotEmpty()) {
+                    var showTable by remember { mutableStateOf(false) }
+                    ScheduleCheck(draft) { draft = it }
+                    TextButton(onClick = { showTable = true }) { Text("View the payment table") }
+                    if (showTable) LoanScheduleDialog(draft, currency) { showTable = false }
                 }
                 Field("Name", draft.name) { draft = draft.copy(name = it) }
                 Field("Lender", draft.lender) { draft = draft.copy(lender = it) }
@@ -253,11 +286,76 @@ private fun LoanDialog(loan: Loan, isNew: Boolean, onSave: (Loan) -> Unit, onDel
                 NumberField("Remaining debt", draft.remainingDebt) { draft = draft.copy(remainingDebt = it) }
                 NumberField("Original amount", draft.originalAmount) { draft = draft.copy(originalAmount = it) }
                 NumberField("Interest rate (% a year)", draft.interestRatePct) { draft = draft.copy(interestRatePct = it) }
-                NumberField("Contribution rate / bidragssats (%)", draft.contributionRatePct) { draft = draft.copy(contributionRatePct = it) }
-                NumberField("Monthly payment", draft.monthlyPayment) { draft = draft.copy(monthlyPayment = it) }
+                NumberField("Administration fee rate (bidragssats, %)", draft.contributionRatePct) { draft = draft.copy(contributionRatePct = it) }
+                Text("How often is it paid?", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(12 to "Monthly", 4 to "Quarterly", 2 to "Half-year", 1 to "Yearly").forEach { (n, label) ->
+                        FilterChip(
+                            selected = (draft.paymentsPerYear ?: 12) == n,
+                            onClick = { draft = draft.copy(paymentsPerYear = n) },
+                            label = { Text(label) }
+                        )
+                    }
+                }
+                NumberField("Cost per month (what to set aside)", draft.monthlyPayment ?: draft.paymentAmount?.div(Mortgage.periodMonths(draft))) {
+                    draft = draft.copy(monthlyPayment = it, paymentAmount = null)
+                }
+                Field("Paid out (YYYY-MM-DD)", draft.payoutDate) { draft = draft.copy(payoutDate = it) }
+                Field("First payment (YYYY-MM-DD)", draft.firstPaymentDate) { draft = draft.copy(firstPaymentDate = it) }
+                if (Mortgage.periodMonths(draft) > 1) {
+                    NumberField("First payment amount (optional, from the payment overview)", draft.firstPaymentAmount) { draft = draft.copy(firstPaymentAmount = it) }
+                }
+                // What the payments come to: the first covers the months since the payout.
+                val now = remember { System.currentTimeMillis() }
+                val firstDue = com.financetracker.app.util.advisor.AttentionChecks.parseDate(draft.firstPaymentDate)
+                val monthly = Mortgage.plannedMonthly(draft, now)
+                if (firstDue != null && monthly != null && monthly > 0) {
+                    val firstMonths = Mortgage.monthsCovered(draft, firstDue)
+                    val period = Mortgage.periodMonths(draft)
+                    Text(
+                        "First payment covers $firstMonths month${if (firstMonths == 1) "" else "s"}: ≈ ${Formatters.currency(Mortgage.paymentOn(draft, firstDue, now) ?: 0.0, currency)}" +
+                            if (period > 1) ". Then every $period months: ≈ ${Formatters.currency(monthly * period, currency)}" else "",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Text("Paid from", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 4.dp))
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    FilterChip(selected = draft.paidFromAccountId == null, onClick = { draft = draft.copy(paidFromAccountId = null) }, label = { Text("Not set") })
+                    accounts.forEach { account ->
+                        FilterChip(
+                            selected = draft.paidFromAccountId == account.account.id,
+                            onClick = { draft = draft.copy(paidFromAccountId = account.account.id) },
+                            label = { Text(account.account.name) }
+                        )
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Shared with household", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            if (draft.sharedBy.isNotBlank()) "Shared by ${draft.sharedBy}. Changes show on both phones."
+                            else "Your partner's phone sees and can edit the same loan.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(checked = draft.sharedWithHousehold, onCheckedChange = { draft = draft.copy(sharedWithHousehold = it) })
+                }
+                if (draft.sharedWithHousehold) {
+                    NumberField("You own (%, from the title deed / skøde)", draft.ownershipSharePct) { draft = draft.copy(ownershipSharePct = it?.coerceIn(0.0, 100.0)) }
+                }
                 NumberField("Years left", draft.yearsLeft) { draft = draft.copy(yearsLeft = it) }
                 Field("Rate type (fixed / variable)", draft.rateType) { draft = draft.copy(rateType = it) }
                 Field("Next rate reset", draft.nextRateReset) { draft = draft.copy(nextRateReset = it) }
+                ListField("All rate resets (YYYY-MM-DD, comma between)", draft.rateResets.joinToString(", ")) {
+                    draft = draft.copy(rateResets = it.split(',').map(String::trim).filter(String::isNotEmpty))
+                }
+                Field("Fee discount (e.g. KundeKroner)", draft.discountName) { draft = draft.copy(discountName = it) }
+                NumberField("Fee discount (% a year of the debt)", draft.discountPct) { draft = draft.copy(discountPct = it) }
+                Field("Discount guaranteed until", draft.discountUntil) { draft = draft.copy(discountUntil = it) }
+                NumberField("Tax deduction on interest & fee (%)", draft.taxDeductionPct) { draft = draft.copy(taxDeductionPct = it) }
                 Field("Interest-only until", draft.interestOnlyUntil) { draft = draft.copy(interestOnlyUntil = it) }
                 Field("Ends", draft.endDate) { draft = draft.copy(endDate = it) }
                 Field("Early repayment terms", draft.earlyRepayment, singleLine = false) { draft = draft.copy(earlyRepayment = it) }
@@ -371,6 +469,59 @@ fun AttentionSettings(modifier: Modifier = Modifier) {
             )
             Text(if (enabled) "Phone notifications on" else "Phone notifications off", modifier = Modifier.padding(start = 8.dp))
         }
+        YourAlerts()
+    }
+}
+
+/** The alerts the person set up (usually by asking the AI advisor), and the weekly AI summary. */
+@Composable
+private fun YourAlerts() {
+    val alerts by UserAlerts.alerts.collectAsState()
+    val weekly by WeeklySummarySettings.enabled.collectAsState()
+    val currency by CurrencySettings.currencyCode.collectAsState()
+    val money = { value: Double -> Formatters.currency(value, currency) }
+
+    Text("Your alerts", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 24.dp))
+    Text(
+        if (alerts.isEmpty()) {
+            "None yet. Ask the AI advisor, e.g. \"Tell me if takeaway goes over 1,000 kr this month\" or " +
+                "\"Warn me about any payment over 3,000 kr\". The app checks them itself, so they don't use the AI."
+        } else {
+            "Checked by the app after each bank sync and once a day. They don't use the AI."
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)
+    )
+    alerts.forEach { alert ->
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(UserAlerts.describe(alert, money), style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    listOfNotNull(
+                        if (alert.kind == AlertKind.CATEGORY_LIMIT) "Monthly" else "Each payment",
+                        alert.warnAtPercent?.takeIf { alert.kind == AlertKind.CATEGORY_LIMIT }?.let { "warns at $it%" }
+                    ).joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(checked = alert.enabled, onCheckedChange = { UserAlerts.setEnabled(alert.id, it) })
+            IconButton(onClick = { UserAlerts.remove(alert.id) }) {
+                Icon(Icons.Filled.Delete, contentDescription = "Delete alert: ${UserAlerts.describe(alert, money)}")
+            }
+        }
+    }
+
+    Text("Weekly AI summary", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 24.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "A short summary of your week every Sunday at 18:00, on Home and as a notification. One short AI request a week.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        Switch(checked = weekly, onCheckedChange = WeeklySummarySettings::setEnabled)
     }
 }
 
@@ -383,6 +534,16 @@ private fun Field(label: String, value: String, singleLine: Boolean = true, onCh
         singleLine = singleLine,
         modifier = Modifier.fillMaxWidth()
     )
+}
+
+/** A comma-separated list: keeps what's typed (separators too) while the parsed value updates. */
+@Composable
+private fun ListField(label: String, initial: String, onChange: (String) -> Unit) {
+    var text by remember { mutableStateOf(initial) }
+    Field(label, text) {
+        text = it
+        onChange(it)
+    }
 }
 
 /** A number field that accepts both 1234.5 and Danish 1.234,5. */

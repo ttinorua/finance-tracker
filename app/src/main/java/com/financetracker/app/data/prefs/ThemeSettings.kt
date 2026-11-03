@@ -1,36 +1,47 @@
 package com.financetracker.app.data.prefs
 
 import android.content.Context
+import com.financetracker.app.ui.theme.AppThemes
+import com.financetracker.app.ui.theme.ThemeColour
+import com.financetracker.app.ui.theme.ThemeStyle
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
-enum class ThemeMode(val label: String) {
-    SYSTEM("System default"),
-    LIGHT("Light"),
-    DARK("Dark")
-}
+/** The theme chosen in Settings > General > Appearance. With [matchPhone], the app switches to the
+ * Dark or Light theme of the same colour when the phone's dark mode doesn't match. */
+data class ThemeSelection(
+    val style: ThemeStyle = AppThemes.DEFAULT_STYLE,
+    val colour: ThemeColour = AppThemes.DEFAULT_COLOUR,
+    val matchPhone: Boolean = false
+)
 
-/** Which [ThemeMode] the app renders in — read by
- * [com.financetracker.app.ui.theme.PersonalFinanceTheme] to resolve whether it's actually in
- * dark mode right now ([ThemeMode.SYSTEM] still follows the device setting). */
+/** Read by [com.financetracker.app.ui.theme.PersonalFinanceTheme]. */
 object ThemeSettings {
     private const val PREFS_NAME = "finance_prefs"
-    private const val KEY_THEME_MODE = "theme_mode"
+    private const val KEY_STYLE = "theme_style"
+    private const val KEY_COLOUR = "theme_colour"
+    private const val KEY_MATCH_PHONE = "theme_match_phone"
 
     private lateinit var prefs: android.content.SharedPreferences
-    private val _themeMode = MutableStateFlow(ThemeMode.SYSTEM)
-    val themeMode: StateFlow<ThemeMode> get() = _themeMode
+    private val _selection = MutableStateFlow(ThemeSelection())
+    val selection: StateFlow<ThemeSelection> get() = _selection
 
     fun init(context: Context) {
         prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val stored = prefs.getString(KEY_THEME_MODE, null)
-        _themeMode.value = stored?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() } ?: ThemeMode.SYSTEM
+        _selection.value = ThemeSelection(
+            style = prefs.getString(KEY_STYLE, null)?.let { runCatching { ThemeStyle.valueOf(it) }.getOrNull() } ?: AppThemes.DEFAULT_STYLE,
+            colour = prefs.getString(KEY_COLOUR, null)?.let { runCatching { ThemeColour.valueOf(it) }.getOrNull() } ?: AppThemes.DEFAULT_COLOUR,
+            matchPhone = prefs.getBoolean(KEY_MATCH_PHONE, false)
+        )
     }
 
-    fun setThemeMode(mode: ThemeMode) {
-        _themeMode.value = mode
-        if (::prefs.isInitialized) {
-            prefs.edit().putString(KEY_THEME_MODE, mode.name).apply()
-        }
+    fun setTheme(style: ThemeStyle, colour: ThemeColour) {
+        _selection.value = _selection.value.copy(style = style, colour = colour)
+        if (::prefs.isInitialized) prefs.edit().putString(KEY_STYLE, style.name).putString(KEY_COLOUR, colour.name).apply()
+    }
+
+    fun setMatchPhone(enabled: Boolean) {
+        _selection.value = _selection.value.copy(matchPhone = enabled)
+        if (::prefs.isInitialized) prefs.edit().putBoolean(KEY_MATCH_PHONE, enabled).apply()
     }
 }

@@ -2,6 +2,8 @@ package com.financetracker.app.data.backup
 
 import com.financetracker.app.data.db.entity.Account
 import com.financetracker.app.data.db.entity.Category
+import com.financetracker.app.data.db.entity.Receipt
+import com.financetracker.app.data.db.entity.ReceiptItem
 import com.financetracker.app.data.db.entity.Transaction
 import com.financetracker.app.data.db.entity.TransactionType
 import org.json.JSONArray
@@ -22,6 +24,8 @@ data class BackupContents(
     val accounts: List<Account>,
     val categories: List<Category>,
     val transactions: List<Transaction>,
+    val receipts: List<Receipt> = emptyList(),
+    val receiptItems: List<ReceiptItem> = emptyList(),
     /** SharedPreferences values: String, Int, Long, Float, Boolean or Set<String>. */
     val prefs: Map<String, Any>,
     val includesBankConnections: Boolean
@@ -142,6 +146,36 @@ object BackupCodec {
                 })
             }
         })
+        put("receipts", JSONArray().apply {
+            contents.receipts.forEach { r ->
+                put(JSONObject().apply {
+                    put("id", r.id)
+                    put("source", r.source)
+                    put("externalId", r.externalId)
+                    put("storeName", r.storeName)
+                    put("purchasedAt", r.purchasedAt)
+                    put("total", r.total)
+                    put("discount", r.discount)
+                    put("transactionId", r.transactionId ?: JSONObject.NULL)
+                    put("split", r.split)
+                    put("createdAt", r.createdAt)
+                })
+            }
+        })
+        put("receiptItems", JSONArray().apply {
+            contents.receiptItems.forEach { i ->
+                put(JSONObject().apply {
+                    put("id", i.id)
+                    put("receiptId", i.receiptId)
+                    put("position", i.position)
+                    put("name", i.name)
+                    put("quantity", i.quantity)
+                    put("amount", i.amount)
+                    put("discount", i.discount)
+                    put("categoryId", i.categoryId ?: JSONObject.NULL)
+                })
+            }
+        })
         put("prefs", JSONObject().apply {
             contents.prefs.forEach { (key, value) ->
                 val typed = when (value) {
@@ -192,6 +226,33 @@ object BackupCodec {
                 createdAt = it.optLong("createdAt", it.getLong("date"))
             )
         }
+        // Backups from before receipts simply have none.
+        val receipts = root.array("receipts").map {
+            Receipt(
+                id = it.getLong("id"),
+                source = it.getString("source"),
+                externalId = it.getString("externalId"),
+                storeName = it.optString("storeName"),
+                purchasedAt = it.getLong("purchasedAt"),
+                total = it.getDouble("total"),
+                discount = it.optDouble("discount", 0.0),
+                transactionId = if (it.isNull("transactionId")) null else it.getLong("transactionId"),
+                split = it.optBoolean("split", false),
+                createdAt = it.optLong("createdAt", it.getLong("purchasedAt"))
+            )
+        }
+        val receiptItems = root.array("receiptItems").map {
+            ReceiptItem(
+                id = it.getLong("id"),
+                receiptId = it.getLong("receiptId"),
+                position = it.optInt("position", 0),
+                name = it.optString("name"),
+                quantity = it.optDouble("quantity", 1.0),
+                amount = it.getDouble("amount"),
+                discount = it.optDouble("discount", 0.0),
+                categoryId = if (it.isNull("categoryId")) null else it.getLong("categoryId")
+            )
+        }
         val prefsJson = root.optJSONObject("prefs") ?: JSONObject()
         val prefs = mutableMapOf<String, Any>()
         prefsJson.keys().forEach { key ->
@@ -212,6 +273,8 @@ object BackupCodec {
             accounts = accounts,
             categories = categories,
             transactions = transactions,
+            receipts = receipts,
+            receiptItems = receiptItems,
             prefs = prefs,
             includesBankConnections = root.optBoolean("includesBankConnections", false)
         )

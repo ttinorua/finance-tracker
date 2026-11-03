@@ -12,6 +12,7 @@ import com.financetracker.app.data.prefs.BankScheduledPayments
 import com.financetracker.app.data.prefs.BudgetSettings
 import com.financetracker.app.data.prefs.DismissedRecurringExpenses
 import com.financetracker.app.data.prefs.FixedExpenseCategories
+import com.financetracker.app.data.prefs.FixedMerchants
 import com.financetracker.app.data.prefs.MainAccountSettings
 import com.financetracker.app.data.prefs.ScheduledPayment
 import com.financetracker.app.data.prefs.toTransactionDetails
@@ -95,7 +96,7 @@ class DashboardTransactionsViewModel(
             repository.observeAccounts(),
             repository.observeCategories(),
             DismissedRecurringExpenses.dismissed,
-            FixedExpenseCategories.fixedCategoryIds,
+            FixedExpenseCategories.fixedCategoryIds.combine(FixedMerchants.merchants) { ids, _ -> ids },
             BankScheduledPayments.payments
         ) { accounts, categories, dismissedRecurring, fixedCategoryIds, scheduledPayments ->
             DashboardTransactionsExtras(accounts, categories, dismissedRecurring, fixedCategoryIds, scheduledPayments)
@@ -134,7 +135,8 @@ class DashboardTransactionsViewModel(
                 scheduled = scheduledPayments
                     .filter { accountId == null || it.accountId == accountId }
                     .map { it.toTransactionDetails(categoriesById) },
-                excludeTransfers = excludeTransfers
+                excludeTransfers = excludeTransfers,
+                fixedMerchants = FixedMerchants.merchants.value
             )
         } else {
             emptyList()

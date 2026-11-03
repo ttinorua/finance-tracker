@@ -18,10 +18,11 @@ fun isTransferCategory(mainCategoryName: String?, categoryName: String?): Boolea
  * [excludeTransfers] on, an "Other (Transfer)" transaction is left out in both directions across
  * "All accounts" — money moved into savings isn't spending, and money moved back isn't income.
  *
- * When [transfersInAreIncome] (see [transfersInCountAsIncome]), money transferred *in* from
- * another of the user's accounts is income — a budget or personal account is funded entirely by
- * transfers, and would otherwise always show ~0 income. Outgoing transfers still stay out of
- * spending.
+ * When [transfersInAreIncome] (see [transfersInCountAsIncome]), transfers count in both
+ * directions for that account: money moved in is its income and money moved out is its spending.
+ * A savings or bills account is funded entirely by transfers, so without the money going in it
+ * would show ~0 income, and without the money going out a withdrawal from savings would never
+ * show and "Net saved" would only ever grow.
  *
  * The transaction's own stored data never changes — this only affects which totals it's summed
  * into, the same way [effectiveReportingDate] only shifts which period a salary counts toward.
@@ -34,11 +35,12 @@ fun countsTowardTotals(
     transfersInAreIncome: Boolean
 ): Boolean {
     if (!excludeTransfers || !isTransferCategory(mainCategoryName, categoryName)) return true
-    return transfersInAreIncome && type == TransactionType.INCOME
+    return transfersInAreIncome
 }
 
-/** Transfers in count as income only when viewing a single account other than the main one —
+/** Transfers count (both ways) only when viewing a single account other than the main one —
  * the main account is where real income lands, so money moved back into it (e.g. from savings)
- * isn't income, while every other account is funded by transfers. */
+ * isn't income and money moved out of it isn't spending, while every other account is funded by
+ * transfers. */
 fun transfersInCountAsIncome(selectedAccountId: Long?, mainAccountId: Long?): Boolean =
     selectedAccountId != null && selectedAccountId != mainAccountId

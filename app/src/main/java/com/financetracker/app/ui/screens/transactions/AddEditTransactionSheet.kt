@@ -37,18 +37,24 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.financetracker.app.data.ai.CategorySuggester
 import com.financetracker.app.data.ai.AiService
 import com.financetracker.app.data.ai.LearnedCategoryRules
+import com.financetracker.app.data.ai.MerchantLogoLookup
 import com.financetracker.app.data.db.entity.Account
 import com.financetracker.app.data.db.entity.Category
 import com.financetracker.app.data.db.entity.TransactionType
 import com.financetracker.app.data.db.entity.TransactionWithDetails
 import com.financetracker.app.data.prefs.CurrencySettings
+import com.financetracker.app.data.prefs.MerchantOverrides
+import com.financetracker.app.ui.components.CategoryIconTile
 import com.financetracker.app.ui.components.CategoryPickerField
+import com.financetracker.app.ui.components.CompanyLogo
 import com.financetracker.app.util.Formatters
 import com.financetracker.app.util.todayUtcMidnight
 import kotlinx.coroutines.launch
@@ -75,6 +81,7 @@ fun AddEditTransactionSheet(
     var amountError by remember { mutableStateOf<String?>(null) }
     var isSuggesting by remember { mutableStateOf(false) }
     var suggestError by remember { mutableStateOf<String?>(null) }
+    var showMerchantStyle by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
 
     val categoriesForType = categories.filter { it.type == type }
@@ -111,6 +118,37 @@ fun AddEditTransactionSheet(
                 text = if (existing == null) "Add Transaction" else "Edit Transaction",
                 style = MaterialTheme.typography.titleLarge
             )
+
+            // How this company shows in the list (logo and short name), with a way to change it.
+            if (existing != null && existing.note.isNotBlank()) {
+                val cachedDomains by MerchantLogoLookup.domains.collectAsState()
+                val cachedNames by MerchantLogoLookup.names.collectAsState()
+                val overrides by MerchantOverrides.rules.collectAsState()
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CompanyLogo(
+                        domain = MerchantLogoLookup.domainFor(existing.note, cachedDomains, overrides),
+                        contentDescription = null,
+                        modifier = Modifier.size(36.dp),
+                        photo = MerchantOverrides.photoFor(existing.note, overrides)
+                    ) {
+                        CategoryIconTile(
+                            categoryId = existing.categoryId,
+                            name = existing.categoryName,
+                            mainCategory = existing.mainCategoryName,
+                            colorHex = existing.categoryColorHex,
+                            size = 36.dp
+                        )
+                    }
+                    Text(
+                        MerchantLogoLookup.nameFor(existing.note, cachedNames, overrides) ?: existing.note,
+                        style = MaterialTheme.typography.bodyLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(horizontal = 12.dp)
+                    )
+                    TextButton(onClick = { showMerchantStyle = true }) { Text("Change logo & name") }
+                }
+            }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
@@ -227,6 +265,10 @@ fun AddEditTransactionSheet(
                 Text(if (existing == null) "Add" else "Save")
             }
         }
+    }
+
+    if (showMerchantStyle && existing != null) {
+        MerchantStyleDialog(note = existing.note, onDismiss = { showMerchantStyle = false })
     }
 
     if (showDatePicker) {

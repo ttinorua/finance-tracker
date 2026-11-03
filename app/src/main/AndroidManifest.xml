@@ -5,6 +5,8 @@
     <!-- Used for the optional Claude AI features (chat, category suggestions, insights) and
          for the optional Enable Banking bank sync (Sydbank open-banking / PSD2). -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Voice chat: the app records your question itself and sends it to Groq to be written out. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- A first Enable Banking sync (or any sync after local data was wiped) can take far
          longer than Android's ~10 minute background execution limit for ordinary work — the
@@ -15,6 +17,17 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- The AI advisor's voice: Android 11+ only lets the app see the phone's text-to-speech
+         engine and speech recognizer when they're declared here. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
+    </queries>
 
     <application
         android:name=".FinanceApp"
@@ -30,6 +43,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.PersonalFinanceTracker">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -50,7 +64,35 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="financetracker" android:host="onedrive-auth" />
             </intent-filter>
+            <!-- "Back to Finance Tracker" on the page shown after the ChatGPT sign-in: just brings the
+                 app to the front (Chrome only opens apps from a page through a link like this). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="financetracker" android:host="chatgpt-done" />
+            </intent-filter>
+            <!-- A receipt shared from a store app (Netto+, Coop, Lidl Plus, REMA 1000…), a
+                 screenshot or a PDF: the AI reads it and files it with its bank transaction. -->
+            <intent-filter android:label="Add receipt">
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="application/pdf" />
+            </intent-filter>
         </activity>
+
+        <!-- Where the camera saves a photo of a paper receipt (see ReceiptFiles). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.receipts"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/receipt_paths" />
+        </provider>
 
         <!-- WorkManager's own SystemForegroundService (used by setForeground()) needs its
              foreground service type declared here on Android 14+ whenever a worker requests

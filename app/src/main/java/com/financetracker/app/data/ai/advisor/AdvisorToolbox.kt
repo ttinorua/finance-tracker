@@ -1,5 +1,9 @@
 package com.financetracker.app.data.ai.advisor
 
+import com.financetracker.app.data.prefs.UserAlerts
+import com.financetracker.app.data.ai.chat.AssistantMemory
+import com.financetracker.app.data.prefs.UserAlert
+import com.financetracker.app.data.prefs.AlertKind
 import com.financetracker.app.data.ai.CategorySuggester
 import com.financetracker.app.data.ai.LearnedCategoryRules
 import com.financetracker.app.data.ai.LocalCategoryMatcher
@@ -19,6 +23,8 @@ import com.financetracker.app.data.prefs.LoansAndGoals
 import com.financetracker.app.data.prefs.MainAccountSettings
 import com.financetracker.app.data.prefs.SavingsGoal
 import com.financetracker.app.data.repository.FinanceRepository
+import com.financetracker.app.util.CategoryNames
+import com.financetracker.app.util.LoanSchedule
 import com.financetracker.app.util.advisor.FinanceAnalysis
 import com.financetracker.app.util.advisor.FinanceCalculators
 import com.financetracker.app.util.advisor.GoalTracking
@@ -226,6 +232,53 @@ class AdvisorToolbox(private val snapshot: AdvisorSnapshot) {
             required = listOf("changes")
         ),
         spec(
+            "create_alert",
+            "Prepare an alert the app checks itself after each bank sync and sends as a phone notification: " +
+                "a category going over an amount this month (with an early warning), or any single payment over an amount. Card to Apply.",
+            obj(
+                "kind" to enumStr("category_limit or large_payment.", "category_limit", "large_payment"),
+                "amount" to num("The limit (category_limit: per month) or the payment size (large_payment)."),
+                "category" to str("category_limit: the category, e.g. \"Takeaway\" or \"Food/Takeaway\"."),
+                "warn_at_percent" to num("category_limit: also warn at this % of the limit (default 80; 0 = no early warning)."),
+                "account" to str("Only this account (name); omit for all accounts.")
+            ),
+            required = listOf("kind", "amount")
+        ),
+        spec("list_alerts", "The alerts the user has set up, with their ids.", obj()),
+        spec(
+            "remember",
+            "Save a fact the user asks you to remember for future chats (in any words: \"remember…\", \"keep in mind…\", " +
+                "\"note that…\", \"husk…\"). Saved straight away, no card. Only when the user asks or agrees — never on your own. " +
+                "Write it as one short, self-contained line, e.g. \"3 phones + fiber internet 1000 Mbit on one Telenor bill\".",
+            obj("text" to str("The fact, one short line (max ${AssistantMemory.MAX_LENGTH} characters).")),
+            required = listOf("text")
+        ),
+        spec("list_memories", "Everything the user asked you to remember, with ids and the date saved.", obj()),
+        spec(
+            "update_memory",
+            "Change a saved memory (id from list_memories or the memory list you were given). Saved straight away.",
+            obj("id" to int("The memory's id."), "text" to str("The new text, one short line.")),
+            required = listOf("id", "text")
+        ),
+        spec(
+            "forget_memories",
+            "Delete saved memories the user asks you to forget (ids from list_memories). Deleted straight away.",
+            obj("ids" to arr("The memories' ids.", JSONObject().put("type", "integer"))),
+            required = listOf("ids")
+        ),
+        spec(
+            "remove_alert",
+            "Prepare removing one of the user's alerts (id from list_alerts). Card to Apply.",
+            obj("id" to str("The alert's id.")),
+            required = listOf("id")
+        ),
+        spec(
+            "set_weekly_summary",
+            "Prepare switching the weekly AI summary (Sundays 18:00, on Home and as a notification) on or off. Card to Apply.",
+            obj("enabled" to bool("true = on.")),
+            required = listOf("enabled")
+        ),
+        spec(
             "create_category",
             "Prepare a new category. Shows a card the user must Apply.",
             obj(
@@ -289,6 +342,14 @@ class AdvisorToolbox(private val snapshot: AdvisorSnapshot) {
             "set_budgets" -> setBudgets(a)
             "set_fixed_categories" -> setFixed(a)
             "create_category" -> createCategory(a)
+            "create_alert" -> createAlert(a)
+            "list_alerts" -> listAlerts()
+            "remember" -> remember(a)
+            "list_memories" -> listMemories()
+            "update_memory" -> updateMemory(a)
+            "forget_memories" -> forgetMemories(a)
+            "remove_alert" -> removeAlert(a)
+            "set_weekly_summary" -> setWeeklySummary(a)
             "save_loan" -> saveLoan(a)
             "save_goal" -> saveGoal(a)
             else -> "Error: there's no function called ${call.name}."
@@ -457,6 +518,9 @@ class AdvisorToolbox(private val snapshot: AdvisorSnapshot) {
             loans.forEach { loan ->
                 val json = LoansAndGoals.loanToJson(loan)
                 if (!withSummaries) json.remove("summary")
+                // The full payment table is long; the advisor gets the key figures instead.
+                json.remove("schedule")
+                LoanSchedule.summary(loan, System.currentTimeMillis())?.let { json.put("schedule_summary", it) }
                 appendLine(compact(json))
             }
             appendLine("Savings goals:")
@@ -609,10 +673,12 @@ class AdvisorToolbox(private val snapshot: AdvisorSnapshot) {
         }
         if (txs.isEmpty()) return "No transactions match, so nothing was prepared. Check with find_transactions."
         val type = txs.groupingBy { it.type }.eachCount().maxByOrNull { it.value }!!.key
+        // A differently spelled or placed name ("Take away" for Food › Takeaway) is the same category.
         val existing = findCategory(targetName, targetMain, type)
+            ?: CategoryNames.existing(snapshot.categories.filter { it.id !in uncategorizedIds }, targetName.substringAfterLast('/').substringAfterLast('›').trim(), type)
         val newCategory = if (existing == null) {
             targetMain ?: return "Error: there's no category \"$targetName\"; give to_main_category to create it, or pick one from list_categories."
-            Category(name = targetName.trim(), mainCategory = targetMain.trim(), type = type)
+            Category(name = targetName.trim(), mainCategory = CategoryNames.canonicalMain(snapshot.categories, targetMain), type = type)
         } else {
             null
         }
@@ -685,16 +751,124 @@ class AdvisorToolbox(private val snapshot: AdvisorSnapshot) {
         val main = text(a, "main_category") ?: return "Error: main_category is required."
         val name = text(a, "name") ?: return "Error: name is required."
         val type = if (a.optString("type") == "income") TransactionType.INCOME else TransactionType.EXPENSE
-        findCategory(name, main, type)?.takeIf { it.mainCategory.equals(main, true) }?.let {
-            return "The category ${it.mainCategory}/${it.name} already exists."
+        // Never a second copy: the same name (ignoring capitals, spaces, "&"/"and", plurals) in
+        // any main category is the same category.
+        CategoryNames.existing(snapshot.categories, name, type)?.let {
+            return "The category ${it.mainCategory}/${it.name} already exists, so no new one was prepared. Use that one."
         }
+        val mainName = CategoryNames.canonicalMain(snapshot.categories, main)
         val card = addCard(
             AdvisorCard(
-                0, "New category", lines = listOf("$main › $name (${type.name.lowercase()})"),
-                plan = ActionPlan.CreateCategory(Category(name = name, mainCategory = main, type = type))
+                0, "New category", lines = listOf("$mainName › $name (${type.name.lowercase()})"),
+                plan = ActionPlan.CreateCategory(Category(name = name, mainCategory = mainName, type = type))
             )
         )
         return "Prepared card #${card.id} to create $main/$name. Nothing has changed yet — the user taps Apply."
+    }
+
+    private fun createAlert(a: JSONObject): String {
+        val amount = number(a, "amount")?.takeIf { it > 0 } ?: return "Error: amount must be above 0."
+        val (accountId, error) = account(a)
+        if (error != null) return error
+        val alert = when (a.optString("kind")) {
+            "large_payment" -> UserAlert(kind = AlertKind.LARGE_PAYMENT, limit = amount, accountId = accountId)
+            "category_limit" -> {
+                val name = text(a, "category") ?: return "Error: category_limit needs a category."
+                val category = findCategory(name, null, TransactionType.EXPENSE)
+                    ?: CategoryNames.existing(snapshot.categories, name.substringAfterLast('/').trim(), TransactionType.EXPENSE)
+                    ?: return "Error: no expense category called \"$name\". Use list_categories."
+                val warn = number(a, "warn_at_percent")?.toInt() ?: 80
+                UserAlert(
+                    kind = AlertKind.CATEGORY_LIMIT, limit = amount, categoryId = category.id, categoryName = category.name,
+                    accountId = accountId, warnAtPercent = warn.takeIf { it in 1..99 }
+                )
+            }
+            else -> return "Error: kind must be category_limit or large_payment."
+        }
+        val scope = scopeName(accountId)
+        val lines = when (alert.kind) {
+            AlertKind.CATEGORY_LIMIT -> listOf(
+                "When: ${alert.categoryName} goes over ${money(amount)} in a month",
+                alert.warnAtPercent?.let { "Early warning: at $it%" } ?: "No early warning",
+                "Accounts: $scope"
+            )
+            AlertKind.LARGE_PAYMENT -> listOf("When: any single payment of ${money(amount)} or more", "Accounts: $scope")
+        }
+        val card = addCard(AdvisorCard(0, "New alert", lines = lines + "Checked by the app after each bank sync; sent as a notification.", plan = ActionPlan.SaveAlert(alert)))
+        return "Prepared card #${card.id} for the alert (${lines.first()}). Nothing has changed yet — the user taps Apply. " +
+            "The app checks it itself, so it doesn't use the AI."
+    }
+
+    private fun listAlerts(): String {
+        val alerts = UserAlerts.alerts.value
+        if (alerts.isEmpty()) return "The user has no alerts yet."
+        return alerts.joinToString("\n") { alert ->
+            "- id ${alert.id}: ${UserAlerts.describe(alert, ::money)}" +
+                (alert.warnAtPercent?.takeIf { alert.kind == AlertKind.CATEGORY_LIMIT }?.let { ", early warning at $it%" } ?: "") +
+                ", ${scopeName(alert.accountId)}" + if (alert.enabled) "" else " (switched off)"
+        }
+    }
+
+    // ---------------------------------------------------------------- memory (saved straight away)
+
+    private fun remember(a: JSONObject): String {
+        val text = text(a, "text") ?: return "Error: text is required."
+        return when (val result = AssistantMemory.add(text)) {
+            is AssistantMemory.AddResult.Saved -> "Saved as memory id ${result.memory.id}: \"${result.memory.text}\". Tell the user it's saved."
+            is AssistantMemory.AddResult.AlreadySaved -> "Already saved as memory id ${result.memory.id}; nothing changed."
+            AssistantMemory.AddResult.Full ->
+                "Error: the memory is full (${AssistantMemory.MAX_ITEMS} items). Ask the user which ones to forget first."
+            AssistantMemory.AddResult.Empty -> "Error: text is empty."
+        }
+    }
+
+    private fun listMemories(): String {
+        val memories = AssistantMemory.memories.value
+        if (memories.isEmpty()) return "Nothing saved yet."
+        return memories.joinToString("\n") { "- id ${it.id} (saved ${day.format(it.savedAt)}): ${it.text}" }
+    }
+
+    private fun updateMemory(a: JSONObject): String {
+        val id = a.optInt("id", -1)
+        val text = text(a, "text") ?: return "Error: text is required."
+        val old = AssistantMemory.get(id) ?: return "Error: no memory with id $id. Use list_memories."
+        return if (AssistantMemory.edit(id, text)) "Changed memory id $id from \"${old.text}\" to \"${AssistantMemory.get(id)?.text}\"."
+        else "Error: couldn't change memory id $id."
+    }
+
+    private fun forgetMemories(a: JSONObject): String {
+        val array = a.optJSONArray("ids")
+        val ids = when {
+            array != null -> (0 until array.length()).mapNotNull { i -> array.opt(i)?.toString()?.trim()?.toDoubleOrNull()?.toInt() }
+            a.has("ids") -> listOfNotNull(a.optString("ids").trim().toDoubleOrNull()?.toInt())
+            else -> emptyList()
+        }
+        if (ids.isEmpty()) return "Error: ids is required."
+        val removed = AssistantMemory.remove(ids)
+        val missing = ids - removed.map { it.id }.toSet()
+        return buildString {
+            if (removed.isEmpty()) append("Nothing deleted.") else append("Deleted: " + removed.joinToString("; ") { "\"${it.text}\"" } + ".")
+            if (missing.isNotEmpty()) append(" No memory with id ${missing.joinToString()}.")
+        }
+    }
+
+    private fun removeAlert(a: JSONObject): String {
+        val id = text(a, "id") ?: return "Error: id is required."
+        val alert = UserAlerts.alerts.value.firstOrNull { it.id == id } ?: return "Error: no alert with id $id. Use list_alerts."
+        val card = addCard(AdvisorCard(0, "Remove alert", lines = listOf(UserAlerts.describe(alert, ::money)), plan = ActionPlan.RemoveAlert(alert)))
+        return "Prepared card #${card.id} to remove the alert. Nothing has changed yet — the user taps Apply."
+    }
+
+    private fun setWeeklySummary(a: JSONObject): String {
+        val on = a.optBoolean("enabled", true)
+        val card = addCard(
+            AdvisorCard(
+                0, if (on) "Weekly summary on" else "Weekly summary off",
+                lines = listOf(if (on) "A short AI summary of your week every Sunday at 18:00, on Home and as a notification." else "No more Sunday summaries."),
+                plan = ActionPlan.SetWeeklySummary(on)
+            )
+        )
+        return "Prepared card #${card.id}. Nothing has changed yet — the user taps Apply."
     }
 
     private fun saveLoan(a: JSONObject): String {

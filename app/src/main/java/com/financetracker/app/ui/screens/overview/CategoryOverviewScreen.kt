@@ -1,5 +1,16 @@
 package com.financetracker.app.ui.screens.overview
 
+import androidx.compose.material.icons.automirrored.filled.ShowChart
+import androidx.compose.foundation.layout.statusBarsPadding
+import com.financetracker.app.ui.components.periodTitle
+import com.financetracker.app.ui.components.HeaderButton
+import com.financetracker.app.ui.components.ScreenHeader
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.material.icons.filled.AccountBalanceWallet
+import com.financetracker.app.ui.components.IconTile
+import com.financetracker.app.ui.components.CategoryIconTile
+import com.financetracker.app.ui.components.MainCategoryIconTile
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -26,6 +37,12 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -50,8 +67,12 @@ import com.financetracker.app.util.TrendGranularity
 @Composable
 fun CategoryOverviewScreen(
     viewModel: CategoryOverviewViewModel,
-    onOpenTransactions: (TransactionsDrillDown) -> Unit
+    onOpenTransactions: (TransactionsDrillDown) -> Unit,
+    shopping: @Composable (Modifier) -> Unit = {},
+    onOpenTrends: () -> Unit = {},
+    onOpenAskAi: () -> Unit = {}
 ) {
+    var tab by rememberSaveable { mutableIntStateOf(0) }
     val state by viewModel.uiState.collectAsState()
     val currencyCode by CurrencySettings.currencyCode.collectAsState()
     val unit = if (state.granularity == TrendGranularity.MONTH) "month" else "year"
@@ -86,34 +107,56 @@ fun CategoryOverviewScreen(
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Spending Overview") }) }
-    ) { padding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            item {
+        // Same header as Home, with the shared account and period chips (see ViewFilter).
+        topBar = {
+            Column(modifier = Modifier.statusBarsPadding().padding(horizontal = 16.dp)) {
+                ScreenHeader(smallLine = "Spending", title = periodTitle(state.periodOption), onOpenAskAi = onOpenAskAi) {
+                    HeaderButton(Icons.AutoMirrored.Filled.ShowChart, "Trends", onOpenTrends)
+                }
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
+                    modifier = Modifier.padding(vertical = 10.dp).horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    PeriodSelectorChip(
+                        option = state.periodOption,
+                        customRange = state.customRange,
+                        onOptionSelected = viewModel::selectPeriod,
+                        onCustomRangeSelected = viewModel::selectCustomRange
+                    )
                     AccountSelectorChip(
                         accounts = state.accounts,
                         selectedAccountId = state.selectedAccountId,
                         onAccountSelected = viewModel::selectAccount
                     )
-                    CategoryFilterChip(
-                        categories = state.categories,
-                        selected = state.categoryFilter,
-                        onSelected = viewModel::selectCategoryFilter
-                    )
+                    // The category filter is only for the Categories tab (Shopping is groceries).
+                    if (tab == 0) {
+                        CategoryFilterChip(
+                            categories = state.categories,
+                            selected = state.categoryFilter,
+                            onSelected = viewModel::selectCategoryFilter
+                        )
+                    }
                 }
             }
+        }
+    ) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding)) {
+        TabRow(selectedTabIndex = tab, containerColor = Color.Transparent) {
+            listOf("Categories", "Shopping").forEachIndexed { i, label ->
+                Tab(selected = tab == i, onClick = { tab = i }, text = { Text(label) })
+            }
+        }
+        if (tab == 1) {
+            shopping(Modifier.weight(1f))
+            return@Column
+        }
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {
@@ -146,15 +189,9 @@ fun CategoryOverviewScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        "Breakdown",
+                        "Breakdown · ${state.periodOption.label.lowercase()}",
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.weight(1f)
-                    )
-                    PeriodSelectorChip(
-                        option = state.periodOption,
-                        customRange = state.customRange,
-                        onOptionSelected = viewModel::selectPeriod,
-                        onCustomRangeSelected = viewModel::selectCustomRange
                     )
                 }
             }
@@ -200,10 +237,19 @@ fun CategoryOverviewScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(16.dp),
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            when (state.groupBy) {
+                                GroupByOption.MAIN_CATEGORY -> MainCategoryIconTile(entry.key, size = 34.dp)
+                                GroupByOption.CATEGORY -> {
+                                    val category = state.categories.firstOrNull { it.name == entry.key }
+                                    CategoryIconTile(category?.id, category?.name ?: entry.key.takeIf { it != "Uncategorized" }, category?.mainCategory, category?.colorHex, size = 34.dp)
+                                }
+                                GroupByOption.ACCOUNT -> IconTile(Icons.Filled.AccountBalanceWallet, MaterialTheme.colorScheme.primary, 34.dp)
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
                             Text(
                                 text = entry.label,
                                 style = MaterialTheme.typography.bodyLarge,
@@ -223,6 +269,7 @@ fun CategoryOverviewScreen(
                     }
                 }
             }
+        }
         }
     }
 }

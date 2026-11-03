@@ -1,5 +1,6 @@
 package com.financetracker.app.ui.screens.overview
 
+import com.financetracker.app.data.prefs.ViewFilter
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.financetracker.app.data.db.entity.Account
@@ -57,18 +58,13 @@ private data class OverviewFilters(
  * one category or main category when chosen. Income lives on the Dashboard and Trends screens. */
 class CategoryOverviewViewModel(private val repository: FinanceRepository) : ViewModel() {
 
-    private val _periodOption = MutableStateFlow(PeriodOption.THIS_MONTH)
-    private val _customRange = MutableStateFlow<Pair<Long, Long>?>(null)
+    // Account and period are shared with the other tabs and remembered (see ViewFilter).
+    private val _periodOption = ViewFilter.period
+    private val _customRange = ViewFilter.customRange
     private val _groupBy = MutableStateFlow(GroupByOption.MAIN_CATEGORY)
-    private val _selectedAccountId = MutableStateFlow(MainAccountSettings.mainAccountId.value)
+    private val _selectedAccountId = ViewFilter.accountId
     private val _categoryFilter = MutableStateFlow<CategoryFilter>(CategoryFilter.All)
     private val _granularity = MutableStateFlow(TrendGranularity.MONTH)
-
-    init {
-        viewModelScope.launch {
-            MainAccountSettings.mainAccountId.drop(1).collect { _selectedAccountId.value = it }
-        }
-    }
 
     val uiState: StateFlow<CategoryOverviewUiState> = combine(
         repository.observeTransactions(),
@@ -133,10 +129,7 @@ class CategoryOverviewViewModel(private val repository: FinanceRepository) : Vie
         _periodOption.value = option
     }
 
-    fun selectCustomRange(start: Long, endExclusive: Long) {
-        _customRange.value = start to endExclusive
-        _periodOption.value = PeriodOption.CUSTOM
-    }
+    fun selectCustomRange(start: Long, endExclusive: Long) = ViewFilter.selectCustomRange(start, endExclusive)
 
     fun selectGroupBy(option: GroupByOption) {
         _groupBy.value = option

@@ -8,14 +8,17 @@ import androidx.room.TypeConverters
 import com.financetracker.app.data.bank.SupportedBanks
 import com.financetracker.app.data.db.dao.AccountDao
 import com.financetracker.app.data.db.dao.CategoryDao
+import com.financetracker.app.data.db.dao.ReceiptDao
 import com.financetracker.app.data.db.dao.TransactionDao
 import com.financetracker.app.data.db.entity.Account
 import com.financetracker.app.data.db.entity.Category
+import com.financetracker.app.data.db.entity.Receipt
+import com.financetracker.app.data.db.entity.ReceiptItem
 import com.financetracker.app.data.db.entity.Transaction
 
 @Database(
-    entities = [Account::class, Category::class, Transaction::class],
-    version = 2,
+    entities = [Account::class, Category::class, Transaction::class, Receipt::class, ReceiptItem::class],
+    version = 3,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -24,6 +27,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun accountDao(): AccountDao
     abstract fun categoryDao(): CategoryDao
     abstract fun transactionDao(): TransactionDao
+    abstract fun receiptDao(): ReceiptDao
 
     companion object {
         @Volatile
@@ -37,9 +41,10 @@ abstract class AppDatabase : RoomDatabase() {
                     "finance_tracker.db"
                 )
                     .addCallback(SeedCallback(context))
-                    // Pre-release app, schema is still settling; wipe and reseed on
-                    // version bumps instead of hand-writing migrations for now.
-                    .fallbackToDestructiveMigration()
+                    // Upgrades keep the data (see Migrations). Only an install still on the very
+                    // first test version (1), from before real data was kept, starts afresh.
+                    .addMigrations(*Migrations.ALL)
+                    .fallbackToDestructiveMigrationFrom(1)
                     .build()
                     .also { INSTANCE = it }
             }

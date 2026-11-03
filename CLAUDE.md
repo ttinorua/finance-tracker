@@ -12,44 +12,46 @@ changing anything.
   answer the question, confirm what you're about to change, and wait for the go-ahead before
   coding any of it.
 
-## How to work here
+## Talking to the owner
 
-- Minimal diffs: change only what the task needs. No full-file rewrites.
-- Keep replies short.
-- Ask before adding any library or dependency.
-- If a change touches more than 3 files, post a short plan first and wait for the go-ahead.
-- Don't edit `.claude/` unless asked.
+- Plain, everyday language; short answers. Say what changed for them in the app, not internals.
+- Be honest about what was and wasn't verified (tests pass vs. tried on a real account).
+- Never ask the owner to paste keys or passwords into the chat.
 
-## Stack
+## The repository is public
 
-- Android app, single module `:app`. Kotlin 2.0.21, Jetpack Compose (BOM 2024.09) + Material 3.
-- AGP 8.6.1, Gradle 8.7 wrapper, JDK 17, minSdk 26, compile/targetSdk 34. KSP for Room.
-- Libraries: Room 2.6.1, Navigation Compose, Lifecycle ViewModel, Coroutines/Flow, WorkManager,
-  Apache POI (xlsx), Play Services Auth (Google Drive), anthropic-java. Tests: JUnit 4 + org.json.
-- AI: Gemini → Groq → Claude fallback chain. Bank sync via Enable Banking.
+- Never print, log or commit a secret value (API keys, keystore, passwords, tokens). Key
+  *names* and the public signing fingerprint below are fine.
+- Keys reach the app at build time from environment variables (see `app/build.gradle.kts`).
 
-## Build
+## Building the APK the owner installs ("family build")
 
-- `./gradlew assembleDebug` · `./gradlew assembleRelease` (signed only if keystore env vars set)
-- `./gradlew testDebugUnitTest` (JVM unit tests in `app/src/test`; no instrumented tests)
-- Secrets come from `local.properties` or env vars (see `app/build.gradle.kts`), never the repo.
+Use the `build-apk` skill (`.claude/skills/build-apk/SKILL.md`). In short:
+- Build in a **separate cloud session** started from the pushed branch, so the APK matches GitHub.
+- Run every Gradle command as `env -u ANTHROPIC_API_KEY ./gradlew …` (the platform may set it).
+- Must be **absent**: `FINANCE_APP_ANTHROPIC_API_KEY`, `ENABLE_BANKING_PRIVATE_KEY`,
+  `ENABLE_BANKING_PRIVATE_KEY_B64` (the owner's personal keys).
+- Must be **present**: `GEMINI_API_KEY`, `GROQ_API_KEY`, `FIREBASE_API_KEY`, `FIREBASE_APP_ID`,
+  `FIREBASE_PROJECT_ID`, `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD`. Their presence is
+  correct, not a problem.
+- Sign only with the permanent key: signer SHA-256 must be exactly
+  `e40fb71b074a0b8cabe9615e710ad8b84cabcfc82273298bd7f9b4719ce6758b`. Never another key.
+- Send it as `FinanceTracker-family.apk`; it installs as an update and keeps the owner's data.
 
-## Package structure (`app/src/main/java/com/financetracker/app`)
+## How work is done
 
-- `FinanceApp.kt` (inits prefs singletons, workers), `MainActivity.kt`
-- `data/db` Room `AppDatabase`, `dao/`, `entity/` · `data/repository/FinanceRepository`
-- `data/prefs` SharedPreferences-backed settings objects · `data/ai` AI services, categorisation,
-  `agent/`, `advisor/` · `data/enablebanking` bank sync · `data/bank` bank/category definitions
-- `data/importexport` spreadsheet import/export · `data/backup` full + auto backup (`cloud/`)
-- `data/advisor` attention monitor · `ui/screens/<feature>` Screen + ViewModel per feature
-- `ui/components` shared composables · `ui/navigation` · `ui/theme`
-- `util` pure logic (periods, trends, filters, formatting) · `util/advisor` analysis checks
+- Branch: `feature/category-memory` on `ttinorua/finance-tracker` (renamed from `ttinorua/test`).
+- Before pushing: `env -u ANTHROPIC_API_KEY ./gradlew compileDebugKotlin testDebugUnitTest lintDebug`.
+- Commit messages say what changed and why, in plain words.
+- Stay in the app: store connections run on the phone (sign-in kept encrypted on the device).
+  No separate cloud service or backend holding other people's tokens.
 
-## Conventions
+## Store receipts: status and open items
 
-- No DI framework: ViewModels get dependencies via `util/ViewModelFactory`.
-- ViewModels expose `StateFlow<…UiState>` built with `combine(...).stateIn(viewModelScope, …)`.
-- Settings are `object`s with `init(context)` (called in `FinanceApp`) and a `StateFlow` per value.
-- Pure logic lives in `util/` and is unit-tested in `app/src/test` (`<Name>Test.kt`).
-- KDoc on classes explaining the *why*; plain-language user-facing commit messages.
-- Room uses `fallbackToDestructiveMigration()` (pre-release): a schema bump wipes data.
+Details of each connection: `docs/store-connectors.md` (full handover, incl. Coop findings: `docs/store-connectors-handover.md`).
+- Working: Lidl Plus, Nemlig.com, Netto+, Bilka+, Føtex+, REMA 1000 (Scan Selv purchases only).
+- Føtex+ note: an account without Føtex+ consent gets Salling's "Opret bruger" form after the
+  password; the app makes it visible (its box was 0 px tall in the app window). Confirmed working
+  on the owner's phone (13 Oct): fill in the name, tick all three boxes, press "Opret bruger".
+- Last: **Coop** (Lobyco OIDC + MitID via Signicat; MitID may not finish inside an app window).
+- Order the owner chose: Netto+ → Bilka+/Føtex+ → REMA 1000 → Coop last.

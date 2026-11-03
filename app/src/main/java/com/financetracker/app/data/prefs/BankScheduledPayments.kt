@@ -46,6 +46,13 @@ object BankScheduledPayments {
 
     fun onAccountRemoved(accountId: Long) = replaceForAccount(accountId, emptyList())
 
+    /** A merged category: its upcoming payments move to the one kept. */
+    fun remapCategory(fromId: Long, toId: Long) {
+        if (_payments.value.none { it.categoryId == fromId }) return
+        _payments.update { current -> current.map { if (it.categoryId == fromId) it.copy(categoryId = toId) else it } }
+        persist()
+    }
+
     private fun persist() {
         if (::prefs.isInitialized) prefs.edit().putString(KEY_PAYMENTS, encode(_payments.value)).apply()
     }

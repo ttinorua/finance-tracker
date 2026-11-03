@@ -1,0 +1,83 @@
+rules_version = '2';
+
+// Security rules for the Finance Tracker household budget. Paste these into the Firebase console
+// (Firestore Database → Rules) and publish. Everything inside a household is also encrypted on
+// the phones, so even with these rules the server only stores data it can't read.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function household(id) {
+      return get(/databases/$(database)/documents/households/$(id)).data;
+    }
+
+    function householdAfter(id) {
+      return getAfter(/databases/$(database)/documents/households/$(id)).data;
+    }
+
+    function isMember(id) {
+      return signedIn() && request.auth.uid in household(id).members;
+    }
+
+    // Also true when this same write (batch) is what makes you a member.
+    function isMemberAfter(id) {
+      return signedIn() && request.auth.uid in householdAfter(id).members;
+    }
+
+    // An invite is filed under a hash of its code: readable by anyone who knows the code (it can't
+    // be listed), created and removed only by members of its household.
+    match /invites/{inviteId} {
+      allow get: if signedIn();
+      allow create: if isMemberAfter(request.resource.data.householdId)
+        && request.resource.data.expiresAt is timestamp;
+      allow delete: if isMemberAfter(resource.data.householdId) || isMember(resource.data.householdId);
+    }
+
+    match /households/{householdId} {
+      allow get: if isMember(householdId);
+
+      // Start a household with yourself as the only member.
+      allow create: if signedIn()
+        && request.resource.data.members == [request.auth.uid]
+        && request.resource.data.createdBy == request.auth.uid;
+
+      allow update: if signedIn()
+        && request.resource.data.createdBy == resource.data.createdBy
+        && (
+          // Join: add exactly yourself, at most two members, with a valid unexpired invite.
+          (request.resource.data.members.size() <= 2
+            && request.resource.data.members.hasAll(resource.data.members)
+            && request.resource.data.members.removeAll(resource.data.members) == [request.auth.uid]
+            && get(/databases/$(database)/documents/invites/$(request.resource.data.joinedWith)).data.householdId == householdId
+            && get(/databases/$(database)/documents/invites/$(request.resource.data.joinedWith)).data.expiresAt > request.time)
+          ||
+          // Leave: a member removes only themselves.
+          (request.auth.uid in resource.data.members
+            && request.resource.data.members == resource.data.members.removeAll([request.auth.uid]))
+        );
+
+      // The last member leaving removes the household.
+      allow delete: if isMember(householdId) && resource.data.members.size() == 1;
+
+      // Your own name and settings.
+      match /members/{uid} {
+        allow read: if isMember(householdId);
+        allow write: if uid == request.auth.uid && (isMember(householdId) || isMemberAfter(householdId));
+      }
+
+      // The shared budget: either member can change any line.
+      match /budget/{lineId} {
+        allow read, write: if isMember(householdId);
+      }
+
+      // Each member's monthly spending report, named "<uid>_<month>": only its owner writes it.
+      match /spending/{reportId} {
+        allow read: if isMember(householdId);
+        allow write: if isMember(householdId) && reportId.split('_')[0] == request.auth.uid;
+      }
+    }
+  }
+}

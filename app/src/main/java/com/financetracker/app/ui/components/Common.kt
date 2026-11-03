@@ -2,7 +2,6 @@ package com.financetracker.app.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,8 +32,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.financetracker.app.data.db.entity.CategorySpend
-import com.financetracker.app.ui.theme.BudgetWarningDark
-import com.financetracker.app.ui.theme.BudgetWarningLight
+import com.financetracker.app.ui.theme.BudgetWarning
 import com.financetracker.app.ui.theme.ExpenseRed
 import com.financetracker.app.util.Formatters
 
@@ -153,8 +151,8 @@ fun CategoryBreakdownList(
                             .padding(end = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        CategoryColorDot(spend.colorHex)
-                        Spacer(modifier = Modifier.width(8.dp))
+                        CategoryIconTile(spend.categoryId, spend.categoryName, spend.mainCategory, spend.colorHex, size = 28.dp)
+                        Spacer(modifier = Modifier.width(10.dp))
                         Text(
                             text = spend.categoryName,
                             style = MaterialTheme.typography.bodyMedium,
@@ -204,10 +202,9 @@ fun BudgetProgressRow(
     onClick: (() -> Unit)? = null
 ) {
     val ratio = if (budget > 0) spent / budget else 0.0
-    val isDark = isSystemInDarkTheme()
     val statusColor = when {
         ratio >= 1.0 -> ExpenseRed
-        ratio >= 0.8 -> if (isDark) BudgetWarningDark else BudgetWarningLight
+        ratio >= 0.8 -> BudgetWarning
         else -> MaterialTheme.colorScheme.primary
     }
 

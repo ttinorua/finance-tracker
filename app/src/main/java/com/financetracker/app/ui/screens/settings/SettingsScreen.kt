@@ -1,5 +1,9 @@
 package com.financetracker.app.ui.screens.settings
 
+import com.financetracker.app.ui.screens.household.HouseholdSettings
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.activity.compose.BackHandler
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
@@ -23,6 +27,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -66,7 +71,19 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.Modifier
+import com.financetracker.app.data.enablebanking.BankAutoSync
+import com.financetracker.app.ui.components.parseHexColour
+import com.financetracker.app.ui.components.categoryIconKey
+import com.financetracker.app.ui.components.IconTile
+import com.financetracker.app.ui.components.CategoryIcons
+import com.financetracker.app.ui.components.CategoryIconTile
+import com.financetracker.app.ui.components.CategoryIconPicker
+import com.financetracker.app.util.CategoryIconRules
+import com.financetracker.app.data.prefs.CategoryIconChoices
+import androidx.compose.material.icons.filled.Sync
+import com.financetracker.app.ui.components.GlassCard
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
@@ -76,6 +93,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.financetracker.app.data.bank.Bank
+import com.financetracker.app.data.bank.SupportedBanks
 import com.financetracker.app.data.db.entity.Account
 import com.financetracker.app.data.db.entity.Category
 import com.financetracker.app.data.db.entity.TransactionType
@@ -87,12 +105,11 @@ import com.financetracker.app.data.prefs.FixedExpenseCategories
 import com.financetracker.app.data.prefs.LinkedBankAccount
 import com.financetracker.app.data.prefs.MainAccountSettings
 import com.financetracker.app.data.prefs.SUPPORTED_CURRENCIES
-import com.financetracker.app.data.prefs.ThemeMode
-import com.financetracker.app.data.prefs.ThemeSettings
 import com.financetracker.app.ui.components.AccountSelectorChip
 import com.financetracker.app.ui.components.CategoryColorDot
 import com.financetracker.app.ui.components.CategoryGroupHeader
 import com.financetracker.app.ui.components.CategoryPickerDialog
+import com.financetracker.app.ui.components.CompanyLogo
 import com.financetracker.app.ui.components.accordionShape
 import com.financetracker.app.ui.screens.importexport.ImportExportScreen
 import com.financetracker.app.ui.screens.importexport.ImportExportViewModel
@@ -113,13 +130,16 @@ fun SettingsScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val currencyCode by CurrencySettings.currencyCode.collectAsState()
-    val themeMode by ThemeSettings.themeMode.collectAsState()
     val mainAccountId by MainAccountSettings.mainAccountId.collectAsState()
+    val mainAutoPicked by MainAccountSettings.autoPicked.collectAsState()
     val shiftSalaryToNextMonth by BudgetSettings.shiftSalaryToNextMonth.collectAsState()
     val excludeTransfersFromSpending by BudgetSettings.excludeTransfersFromSpending.collectAsState()
     val anticipateRecurringBills by BudgetSettings.anticipateRecurringBills.collectAsState()
     val fixedExpenseCategoryIds by FixedExpenseCategories.fixedCategoryIds.collectAsState()
-    var tabIndex by remember { mutableIntStateOf(0) }
+    var page by rememberSaveable { mutableStateOf<SettingsPage?>(null) }
+    // The mortgage page sits under Loans & goals.
+    fun back() { page = if (page == SettingsPage.MORTGAGE) SettingsPage.LOANS_GOALS else null }
+    BackHandler(enabled = page != null) { back() }
 
     var showAddAccount by remember { mutableStateOf(false) }
     var showAddCategory by remember { mutableStateOf(false) }
@@ -129,56 +149,35 @@ fun SettingsScreen(
     var mergePending by remember { mutableStateOf<Pair<Account, Account>?>(null) }
     var dedupeTarget by remember { mutableStateOf<Account?>(null) }
     var deleteCategoryTarget by remember { mutableStateOf<Category?>(null) }
+    var iconTarget by remember { mutableStateOf<Category?>(null) }
     var collapsedMains by remember { mutableStateOf(setOf<String>()) }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Settings") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text(page?.title ?: "Settings") },
+                navigationIcon = {
+                    if (page != null) {
+                        IconButton(onClick = { back() }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    }
+                }
+            )
+        },
         floatingActionButton = {
-            if (tabIndex == 0 || tabIndex == 1) {
-                FloatingActionButton(onClick = {
-                    if (tabIndex == 0) showAddAccount = true else showAddCategory = true
-                }) {
+            if (page == SettingsPage.ACCOUNTS) {
+                FloatingActionButton(onClick = { showAddAccount = true }) {
                     Icon(Icons.Filled.Add, contentDescription = "Add")
                 }
             }
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding)) {
-            ScrollableTabRow(selectedTabIndex = tabIndex, edgePadding = 12.dp) {
-                Tab(
-                    selected = tabIndex == 0,
-                    onClick = { tabIndex = 0 },
-                    text = { Text("Accounts", maxLines = 1) }
-                )
-                Tab(
-                    selected = tabIndex == 1,
-                    onClick = { tabIndex = 1 },
-                    text = { Text("Categories", maxLines = 1) }
-                )
-                Tab(
-                    selected = tabIndex == 2,
-                    onClick = { tabIndex = 2 },
-                    text = { Text("Budgets", maxLines = 1) }
-                )
-                Tab(
-                    selected = tabIndex == 3,
-                    onClick = { tabIndex = 3 },
-                    text = { Text("Import/Export", maxLines = 1) }
-                )
-                Tab(
-                    selected = tabIndex == 4,
-                    onClick = { tabIndex = 4 },
-                    text = { Text("General", maxLines = 1) }
-                )
-                Tab(
-                    selected = tabIndex == 5,
-                    onClick = { tabIndex = 5 },
-                    text = { Text("Bank", maxLines = 1) }
-                )
-            }
+            when (page) {
+                null -> SettingsHome(state, onOpen = { page = it })
 
-            when (tabIndex) {
-                0 -> LazyColumn(
+                SettingsPage.ACCOUNTS -> LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(16.dp)
                 ) {
@@ -192,7 +191,7 @@ fun SettingsScreen(
                                 ) {
                                     Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                                         Text(
-                                            accountUi.account.name,
+                                            if (mainAccountId == accountUi.account.id) "★ ${accountUi.account.name}" else accountUi.account.name,
                                             style = MaterialTheme.typography.bodyLarge,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
@@ -227,7 +226,8 @@ fun SettingsScreen(
                                     Column(modifier = Modifier.padding(start = 8.dp)) {
                                         Text("Main account", style = MaterialTheme.typography.bodyMedium)
                                         Text(
-                                            "Shown by default on every screen",
+                                            if (isMain && mainAutoPicked) "Picked automatically, usually where your salary lands. Tick another account to change it."
+                                            else "Shown by default on every screen",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -258,28 +258,76 @@ fun SettingsScreen(
                     }
                 }
 
-                1 -> {
+                SettingsPage.CATEGORIES -> {
                     val grouped = state.categories.groupBy { it.mainCategory }.toSortedMap()
                     val allExpanded = collapsedMains.isEmpty()
+                    val duplicates by viewModel.duplicateCategories.collectAsState()
+                    val categoryMessage by viewModel.categoryMessage.collectAsState()
+                    var confirmMerge by remember { mutableStateOf(false) }
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(16.dp)
                     ) {
-                        item(key = "expand_all_button") {
-                            TextButton(
-                                onClick = {
-                                    collapsedMains = if (allExpanded) grouped.keys.toSet() else emptySet()
-                                },
-                                modifier = Modifier.padding(bottom = 4.dp)
+                        categoryMessage?.let { message ->
+                            item(key = "category_message") {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(message, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                                    TextButton(onClick = viewModel::clearCategoryMessage) { Text("OK") }
+                                }
+                            }
+                        }
+                        if (duplicates.isNotEmpty()) {
+                            item(key = "category_duplicates") {
+                                Card(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+                                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        val extra = duplicates.sumOf { it.remove.size }
+                                        Text(
+                                            "$extra duplicate ${if (extra == 1) "category" else "categories"} found",
+                                            style = MaterialTheme.typography.titleSmall
+                                        )
+                                        Text(
+                                            duplicates.joinToString("\n") { d ->
+                                                "${d.keep.mainCategory} › ${d.keep.name} ← " +
+                                                    d.remove.joinToString { "${it.mainCategory} › ${it.name}" }
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Button(onClick = { confirmMerge = true }) { Text("Merge duplicates") }
+                                    }
+                                }
+                            }
+                        }
+                        item(key = "category_tools") {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = if (allExpanded) Icons.Filled.UnfoldLess else Icons.Filled.UnfoldMore,
-                                    contentDescription = null
-                                )
-                                Text(
-                                    text = if (allExpanded) "Collapse all" else "Expand all",
-                                    modifier = Modifier.padding(start = 4.dp)
-                                )
+                                OutlinedButton(
+                                    onClick = { collapsedMains = if (allExpanded) grouped.keys.toSet() else emptySet() },
+                                    contentPadding = PaddingValues(start = 12.dp, end = 16.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (allExpanded) Icons.Filled.UnfoldLess else Icons.Filled.UnfoldMore,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(19.dp)
+                                    )
+                                    Text(
+                                        text = if (allExpanded) "Collapse all" else "Expand all",
+                                        modifier = Modifier.padding(start = 6.dp)
+                                    )
+                                }
+                                Button(
+                                    onClick = { showAddCategory = true },
+                                    contentPadding = PaddingValues(start = 12.dp, end = 16.dp)
+                                ) {
+                                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(19.dp))
+                                    Text("New category", modifier = Modifier.padding(start = 6.dp))
+                                }
                             }
                         }
                         val groups = grouped.entries.toList()
@@ -311,6 +359,7 @@ fun SettingsScreen(
                                         isFixed = category.id in fixedExpenseCategoryIds,
                                         onToggleFixed = { FixedExpenseCategories.setFixed(category.id, it) },
                                         onDelete = { deleteCategoryTarget = category },
+                                        onChangeIcon = { iconTarget = category },
                                         showDivider = !isLastRow,
                                         shape = accordionShape(top = false, bottom = isLastGroup && isLastRow)
                                     )
@@ -318,39 +367,51 @@ fun SettingsScreen(
                             }
                         }
                     }
+                    if (confirmMerge) {
+                        AlertDialog(
+                            onDismissRequest = { confirmMerge = false },
+                            title = { Text("Merge duplicate categories?") },
+                            text = {
+                                Text(
+                                    "Each pair becomes one category: the one on the left of the arrow is kept, and " +
+                                        "the transactions, receipt lines, budgets, Fixe marks and learned notes of the " +
+                                        "others move onto it. Then the extra copies are removed.\n\n" +
+                                        duplicates.joinToString("\n") { d ->
+                                            "${d.keep.mainCategory} › ${d.keep.name} ← " +
+                                                d.remove.joinToString { "${it.mainCategory} › ${it.name}" }
+                                        }
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    confirmMerge = false
+                                    viewModel.mergeDuplicateCategories()
+                                }) { Text("Merge") }
+                            },
+                            dismissButton = { TextButton(onClick = { confirmMerge = false }) { Text("Cancel") } }
+                        )
+                    }
                 }
 
-                2 -> BudgetsTab(
+                SettingsPage.BUDGETS -> BudgetsTab(
                     categories = state.categories.filter { it.type == TransactionType.EXPENSE },
                     accounts = state.accounts.map { it.account },
                     currencyCode = currencyCode
                 )
 
-                3 -> ImportExportScreen(importExportViewModel)
+                SettingsPage.BACKUP -> ImportExportScreen(importExportViewModel)
 
-                5 -> BankTab(enableBankingViewModel)
+                SettingsPage.BANK -> BankTab(enableBankingViewModel)
 
                 else -> Column(
                     modifier = Modifier
                         .padding(16.dp)
                         .verticalScroll(rememberScrollState())
                 ) {
-                    Text("Theme", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Choose Light or Dark, or follow your device's system setting.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(bottom = 8.dp, top = 4.dp)
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ThemeMode.entries.forEach { mode ->
-                            FilterChip(
-                                selected = themeMode == mode,
-                                onClick = { ThemeSettings.setThemeMode(mode) },
-                                label = { Text(mode.label) }
-                            )
-                        }
-                    }
+                    if (page == SettingsPage.APPEARANCE) AppearanceSettings()
+                    if (page == SettingsPage.HOUSEHOLD) HouseholdSettings(state.accounts.map { it.account })
+
+                    if (page == SettingsPage.GENERAL) {
 
                     Text(
                         "Display currency",
@@ -404,7 +465,8 @@ fun SettingsScreen(
                             "income and expense totals, budgets, and the spending breakdown, " +
                             "since they're neither real income nor real spending. When viewing a " +
                             "single account other than your main account, money transferred in " +
-                            "from your other accounts counts as that account's income. Net " +
+                            "from your other accounts counts as that account's income, and money " +
+                            "moved out counts as its spending. Net " +
                             "balance and the account register still include every transaction.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -451,11 +513,20 @@ fun SettingsScreen(
                         )
                     }
 
-                    AiAssistantSettings(modifier = Modifier.padding(top = 24.dp))
+                    }
 
-                    LoansAndGoalsSettings(accounts = state.accounts, modifier = Modifier.padding(top = 24.dp))
+                    if (page == SettingsPage.AI) AiAssistantSettings()
 
-                    AttentionSettings(modifier = Modifier.padding(top = 24.dp))
+
+                    if (page == SettingsPage.LOANS_GOALS) LoansAndGoalsSettings(accounts = state.accounts, onOpenMortgage = { MortgageNav.loanId = it; page = SettingsPage.MORTGAGE })
+                    if (page == SettingsPage.RECURRING) RecurringSettings()
+                    if (page == SettingsPage.SHARED_BILLS) SharedBillsPage(state.accounts.map { it.account })
+                    if (page == SettingsPage.BILLS_AHEAD) BillsAheadPage(state.accounts.map { it.account })
+                    if (page == SettingsPage.MORTGAGE) MortgagePage(state.accounts)
+
+                    if (page == SettingsPage.ATTENTION) AttentionSettings()
+
+                    if (page == SettingsPage.AI) {
 
                     Text(
                         "AI categorization",
@@ -525,6 +596,7 @@ fun SettingsScreen(
                             ) { Text("Cancel") }
                         }
                     }
+                    }
                 }
             }
         }
@@ -543,8 +615,8 @@ fun SettingsScreen(
     if (showAddCategory) {
         AddCategoryDialog(
             onDismiss = { showAddCategory = false },
-            onConfirm = { mainCategory, name, type ->
-                viewModel.addCategory(mainCategory, name, type)
+            onConfirm = { mainCategory, name, type, icon ->
+                viewModel.addCategory(mainCategory, name, type, icon)
                 showAddCategory = false
             }
         )
@@ -648,6 +720,10 @@ fun SettingsScreen(
         )
     }
 
+    iconTarget?.let { category ->
+        CategoryIconDialog(category, onDismiss = { iconTarget = null })
+    }
+
     deleteCategoryTarget?.let { category ->
         AlertDialog(
             onDismissRequest = { deleteCategoryTarget = null },
@@ -656,6 +732,7 @@ fun SettingsScreen(
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.deleteCategory(category)
+                    CategoryIconChoices.set(category.id, null)
                     deleteCategoryTarget = null
                 }) { Text("Delete") }
             },
@@ -912,6 +989,11 @@ private fun BankDropdown(
             banks.forEach { bank ->
                 DropdownMenuItem(
                     text = { Text(bank.displayName) },
+                    leadingIcon = {
+                        CompanyLogo(domain = bank.logoDomain, contentDescription = null) {
+                            Icon(Icons.Filled.AccountBalance, contentDescription = null, modifier = Modifier.size(20.dp))
+                        }
+                    },
                     onClick = {
                         onSelected(bank)
                         expanded = false
@@ -975,17 +1057,54 @@ private fun RenameAccountDialog(currentName: String, onDismiss: () -> Unit, onCo
     )
 }
 
+/** Change an existing category's icon, or go back to the one picked from its name. */
 @Composable
-private fun AddCategoryDialog(onDismiss: () -> Unit, onConfirm: (String, String, TransactionType) -> Unit) {
+private fun CategoryIconDialog(category: Category, onDismiss: () -> Unit) {
+    val current = categoryIconKey(category.id, category.name, category.mainCategory)
+    val guessed = CategoryIconRules.guess(category.name, category.mainCategory)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(category.name, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                CategoryIconPicker(
+                    selected = current,
+                    colour = parseHexColour(category.colorHex),
+                    onSelect = { key ->
+                        CategoryIconChoices.set(category.id, key.takeIf { it != guessed })
+                        onDismiss()
+                    },
+                    columns = 5
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        dismissButton = {
+            if (current != guessed) {
+                TextButton(onClick = {
+                    CategoryIconChoices.set(category.id, null)
+                    onDismiss()
+                }) { Text("Use automatic icon") }
+            }
+        }
+    )
+}
+
+@Composable
+private fun AddCategoryDialog(onDismiss: () -> Unit, onConfirm: (String, String, TransactionType, String?) -> Unit) {
     var mainCategory by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
     var type by remember { mutableStateOf(TransactionType.EXPENSE) }
+    // Follows the name until the user picks one themselves.
+    var pickedIcon by remember { mutableStateOf<String?>(null) }
+    val guessedIcon = CategoryIconRules.guess(name, mainCategory)
+    val icon = pickedIcon ?: guessedIcon
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("New Category") },
+        title = { Text("New category") },
         text = {
-            Column {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 OutlinedTextField(
                     value = mainCategory,
                     onValueChange = { mainCategory = it },
@@ -1005,13 +1124,34 @@ private fun AddCategoryDialog(onDismiss: () -> Unit, onConfirm: (String, String,
                         label = { Text("Income") }
                     )
                 }
+                Row(modifier = Modifier.padding(top = 16.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconTile(CategoryIcons.icon(icon), CategoryIcons.mainColour(mainCategory.ifBlank { "Uncategorized" }), 36.dp)
+                    Text(
+                        if (pickedIcon == null) "Icon · picked from the name, tap to change" else "Icon",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 12.dp)
+                    )
+                }
+                CategoryIconPicker(
+                    selected = icon,
+                    colour = CategoryIcons.mainColour(mainCategory.ifBlank { "Uncategorized" }),
+                    onSelect = { pickedIcon = it },
+                    columns = 5
+                )
             }
         },
         confirmButton = {
             TextButton(
                 onClick = {
                     if (name.isNotBlank()) {
-                        onConfirm(mainCategory.trim().ifBlank { "Uncategorized" }, name.trim(), type)
+                        // Only a choice that differs from the name's own icon needs keeping.
+                        onConfirm(
+                            mainCategory.trim().ifBlank { "Uncategorized" },
+                            name.trim(),
+                            type,
+                            pickedIcon?.takeIf { it != CategoryIconRules.guess(name.trim(), mainCategory.trim()) }
+                        )
                     }
                 }
             ) { Text("Add") }
@@ -1038,15 +1178,18 @@ private fun BankTab(viewModel: EnableBankingViewModel) {
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        Text("Bank sync", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "Link a bank account via Enable Banking (open banking / PSD2) to pull in " +
-                "transactions automatically instead of exporting and importing a spreadsheet. " +
-                "You can connect more than one bank at once.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(bottom = 16.dp, top = 4.dp)
-        )
+        // The explanation is for setting up; once a bank is connected the room goes to the accounts.
+        if (state.connections.isEmpty()) {
+            Text("Bank sync", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Link a bank account via Enable Banking (open banking / PSD2) to pull in " +
+                    "transactions automatically instead of exporting and importing a spreadsheet. " +
+                    "You can connect more than one bank at once.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 16.dp, top = 4.dp)
+            )
+        }
 
         EnableBankingAppRow(
             ownApplicationId = state.ownApplicationId,
@@ -1092,12 +1235,22 @@ private fun BankTab(viewModel: EnableBankingViewModel) {
         }
 
         val scheduledPayments by BankScheduledPayments.payments.collectAsState()
-        Text(
-            state.lastSyncedAt?.let { "Last synced ${formatBankDate(it)}" } ?: "Never synced",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 2.dp)
-        )
+        val autoSync by BankAutoSync.enabled.collectAsState()
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 2.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    state.lastSyncedAt?.let { "Last synced ${Formatters.syncTimestamp(it)}" } ?: "Never synced",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    if (autoSync) "Syncs automatically about every 6 hours" else "Syncs when you open the app",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(checked = autoSync, onCheckedChange = { BankAutoSync.setEnabled(context, it) })
+        }
         if (state.lastSyncedAt != null) {
             // Collapsed by default and capped: this sits above the connections list and the Sync
             // button in a non-scrolling column, so a long list would push them off screen.
@@ -1136,31 +1289,8 @@ private fun BankTab(viewModel: EnableBankingViewModel) {
                 }
             }
         }
-        Spacer(modifier = Modifier.height(12.dp))
-
-        LazyColumn(modifier = Modifier.weight(1f)) {
-            items(state.connections, key = { it.bankId }) { connection ->
-                BankConnectionSection(
-                    connection = connection,
-                    isStartingAuth = state.isStartingAuth,
-                    onRefresh = { viewModel.startBankAuth(connection.bankId) },
-                    onToggleAccount = { uid, checked -> viewModel.setAccountSelected(connection.bankId, uid, checked) },
-                    onDisconnect = { disconnectTarget = connection }
-                )
-            }
-            if (state.connectableBanks.isNotEmpty()) {
-                item {
-                    ConnectAnotherBankSection(
-                        banks = state.connectableBanks,
-                        selectedBankId = state.selectedBankId,
-                        isStartingAuth = state.isStartingAuth,
-                        onSelected = { id -> viewModel.selectBank(id) },
-                        onConnect = { id -> viewModel.startBankAuth(id) }
-                    )
-                }
-            }
-        }
-
+        Spacer(modifier = Modifier.height(8.dp))
+        // Sync stays in place above the accounts, which get the rest of the screen and scroll.
         if (state.isSyncing) {
             val progress = state.syncProgress
             when {
@@ -1191,12 +1321,12 @@ private fun BankTab(viewModel: EnableBankingViewModel) {
                 else -> LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
             }
         }
-        Spacer(modifier = Modifier.height(8.dp))
         Button(onClick = { viewModel.syncNow() }, enabled = !state.isSyncing, modifier = Modifier.fillMaxWidth()) {
             if (state.isSyncing) {
                 CircularProgressIndicator(modifier = Modifier.size(18.dp))
             } else {
-                Text("Sync now")
+                Icon(Icons.Filled.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text("Sync now", modifier = Modifier.padding(start = 8.dp))
             }
         }
         if (state.isSyncing) {
@@ -1204,6 +1334,31 @@ private fun BankTab(viewModel: EnableBankingViewModel) {
                 Text("Cancel")
             }
         }
+        Spacer(modifier = Modifier.height(8.dp))
+
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            items(state.connections, key = { it.bankId }) { connection ->
+                BankConnectionSection(
+                    connection = connection,
+                    isStartingAuth = state.isStartingAuth,
+                    onRefresh = { viewModel.startBankAuth(connection.bankId) },
+                    onToggleAccount = { uid, checked -> viewModel.setAccountSelected(connection.bankId, uid, checked) },
+                    onDisconnect = { disconnectTarget = connection }
+                )
+            }
+            if (state.connectableBanks.isNotEmpty()) {
+                item {
+                    ConnectAnotherBankSection(
+                        banks = state.connectableBanks,
+                        selectedBankId = state.selectedBankId,
+                        isStartingAuth = state.isStartingAuth,
+                        onSelected = { id -> viewModel.selectBank(id) },
+                        onConnect = { id -> viewModel.startBankAuth(id) }
+                    )
+                }
+            }
+        }
+
     }
 
     disconnectTarget?.let { connection ->
@@ -1232,14 +1387,30 @@ private fun BankConnectionSection(
     onToggleAccount: (uid: String, selected: Boolean) -> Unit,
     onDisconnect: () -> Unit
 ) {
-    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+    GlassCard(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         Column(modifier = Modifier.padding(12.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(connection.bankDisplayName, style = MaterialTheme.typography.titleSmall)
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    CompanyLogo(
+                        domain = SupportedBanks.byId(connection.bankId).logoDomain,
+                        contentDescription = null
+                    ) {
+                        Icon(Icons.Filled.AccountBalance, contentDescription = null, modifier = Modifier.size(20.dp))
+                    }
+                    Column(modifier = Modifier.padding(start = 8.dp)) {
+                        Text(connection.bankDisplayName, style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "${connection.linkedAccounts.count { it.uid in connection.selectedAccountUids }} of " +
+                                "${connection.linkedAccounts.size} synced",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = onRefresh, enabled = !isStartingAuth) {
                         if (isStartingAuth) {
@@ -1302,34 +1473,35 @@ private fun ConnectAnotherBankSection(
 
 @Composable
 private fun BankAccountRow(account: LinkedBankAccount, selected: Boolean, onToggle: (Boolean) -> Unit) {
-    Card(modifier = Modifier.padding(vertical = 4.dp)) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { onToggle(!selected) }
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Checkbox(checked = selected, onCheckedChange = onToggle)
-            Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
-                // Sydbank reuses the same product label (e.g. "Privatkonto") across more than
-                // one account, so a suffix is included here too, not just in the underlying
-                // local account name, or two accounts would look identical in this list.
-                val suffix = account.iban?.takeLast(4) ?: account.uid.take(6)
-                Text(
-                    "${account.product ?: account.name} ••$suffix",
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    "${account.iban ?: account.uid} • ${account.currency}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
+    Row(
+        modifier = Modifier
+            .padding(vertical = 3.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = .04f))
+            .clickable { onToggle(!selected) }
+            .padding(horizontal = 4.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Checkbox(checked = selected, onCheckedChange = onToggle)
+        Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
+            // Sydbank reuses the same product label (e.g. "Privatkonto") across more than
+            // one account, so a suffix is included here too, not just in the underlying
+            // local account name, or two accounts would look identical in this list.
+            val suffix = account.iban?.takeLast(4) ?: account.uid.take(6)
+            Text(
+                "${account.product ?: account.name} ••$suffix",
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                "${account.iban ?: account.uid} • ${account.currency}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -1343,6 +1515,7 @@ private fun CategoryAccordionRow(
     isFixed: Boolean,
     onToggleFixed: (Boolean) -> Unit,
     onDelete: () -> Unit,
+    onChangeIcon: () -> Unit,
     showDivider: Boolean,
     shape: Shape
 ) {
@@ -1356,7 +1529,7 @@ private fun CategoryAccordionRow(
             modifier = Modifier.padding(start = 20.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            CategoryColorDot(category.colorHex, modifier = Modifier.size(10.dp))
+            CategoryIconTile(category.id, category.name, category.mainCategory, category.colorHex, size = 32.dp, onClick = onChangeIcon)
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -1387,7 +1560,7 @@ private fun CategoryAccordionRow(
         }
         if (showDivider) {
             HorizontalDivider(
-                modifier = Modifier.padding(start = 42.dp),
+                modifier = Modifier.padding(start = 64.dp),
                 color = MaterialTheme.colorScheme.outlineVariant
             )
         }

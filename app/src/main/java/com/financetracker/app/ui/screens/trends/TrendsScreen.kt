@@ -1,5 +1,7 @@
 package com.financetracker.app.ui.screens.trends
 
+import androidx.compose.foundation.layout.statusBarsPadding
+import com.financetracker.app.ui.components.ScreenHeader
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -57,7 +59,8 @@ import com.financetracker.app.util.TrendPoint
 fun TrendsScreen(
     viewModel: TrendsViewModel,
     onBack: () -> Unit,
-    onOpenTransactions: (TransactionsDrillDown) -> Unit
+    onOpenTransactions: (TransactionsDrillDown) -> Unit,
+    onOpenAskAi: () -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsState()
     val currencyCode by CurrencySettings.currencyCode.collectAsState()
@@ -95,14 +98,14 @@ fun TrendsScreen(
     }
 
     Scaffold(
+        // Same header as Home. The account is shared with the other tabs; Trends keeps its own range.
         topBar = {
-            TopAppBar(
-                title = { Text("Trends") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                }
+            ScreenHeader(
+                smallLine = "Trends",
+                title = if (state.granularity == TrendGranularity.MONTH) "Last ${state.window.label}" else "By year",
+                modifier = Modifier.statusBarsPadding().padding(end = 16.dp),
+                onBack = onBack,
+                onOpenAskAi = onOpenAskAi
             )
         }
     ) { padding ->

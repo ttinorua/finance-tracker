@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and older, where one rule covers both cloud backup and phone-to-phone transfer:
+     nothing is backed up, so transactions never land in Google's cloud phone backup. Use the app's
+     own backup (Settings > Import/Export) instead. -->
 <full-backup-content>
-    <include domain="database" path="finance_tracker.db" />
+    <exclude domain="root" />
+    <exclude domain="file" />
+    <exclude domain="database" />
+    <exclude domain="sharedpref" />
+    <exclude domain="external" />
 </full-backup-content>

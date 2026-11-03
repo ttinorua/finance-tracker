@@ -1,5 +1,12 @@
 package com.financetracker.app
 
+import com.financetracker.app.data.ai.WeeklySummary
+import com.financetracker.app.data.prefs.UserAlerts
+import com.financetracker.app.data.ai.chat.AssistantPrefs
+import com.financetracker.app.data.ai.chat.AssistantMemory
+import com.financetracker.app.data.ai.chat.SavedChats
+import com.financetracker.app.data.prefs.ViewFilter
+import com.financetracker.app.data.enablebanking.BankAutoSync
 import android.app.Application
 import androidx.work.ExistingWorkPolicy
 import androidx.work.WorkManager
@@ -9,18 +16,26 @@ import com.financetracker.app.data.bank.SupportedBanks
 import com.financetracker.app.data.db.AppDatabase
 import com.financetracker.app.data.advisor.AttentionMonitor
 import com.financetracker.app.data.ai.AiSettings
+import com.financetracker.app.data.ai.chatgpt.ChatGptAuth
 import com.financetracker.app.data.ai.LearnedCategoryRules
+import com.financetracker.app.data.ai.MerchantLogoLookup
+import com.financetracker.app.data.prefs.MerchantOverrides
 import com.financetracker.app.data.backup.AutoBackupSettings
 import com.financetracker.app.data.enablebanking.EnableBankingCredentials
 import com.financetracker.app.data.enablebanking.EnableBankingSyncWorker
 import com.financetracker.app.data.prefs.AiInsightsCache
+import com.financetracker.app.data.prefs.BankReservations
 import com.financetracker.app.data.prefs.BankScheduledPayments
 import com.financetracker.app.data.prefs.BudgetLimits
 import com.financetracker.app.data.prefs.BudgetSettings
 import com.financetracker.app.data.prefs.CurrencySettings
 import com.financetracker.app.data.prefs.DismissedRecurringExpenses
 import com.financetracker.app.data.prefs.EnableBankingPrefs
+import com.financetracker.app.data.household.HouseholdSync
+import com.financetracker.app.data.prefs.CategoryIconChoices
 import com.financetracker.app.data.prefs.FixedExpenseCategories
+import com.financetracker.app.data.prefs.FixedMerchants
+import com.financetracker.app.data.prefs.SharedBillsSettings
 import com.financetracker.app.data.prefs.LoansAndGoals
 import com.financetracker.app.data.prefs.MainAccountSettings
 import com.financetracker.app.data.prefs.ThemeSettings
@@ -39,21 +54,36 @@ class FinanceApp : Application() {
         super.onCreate()
         CurrencySettings.init(this)
         LearnedCategoryRules.init(this)
+        ChatGptAuth.init(this)
         AiSettings.init(this)
         ThemeSettings.init(this)
         MainAccountSettings.init(this)
+        ViewFilter.init(this)
+        SavedChats.init(this)
+        AssistantPrefs.init(this)
+        AssistantMemory.init(this)
+        UserAlerts.init(this)
+        WeeklySummary.init(this)
         BankScheduledPayments.init(this)
+        BankReservations.init(this)
         BudgetSettings.init(this)
         BudgetLimits.init(this)
         AiInsightsCache.init(this)
         DismissedRecurringExpenses.init(this)
+        FixedMerchants.init(this)
+        SharedBillsSettings.init(this)
         FixedExpenseCategories.init(this)
+        CategoryIconChoices.init(this)
         EnableBankingPrefs.init(this)
         EnableBankingCredentials.init(this)
         AutoBackupSettings.init(this)
         LoansAndGoals.init(this)
+        MerchantOverrides.init(this)
+        MerchantLogoLookup.init(this)
         repository = FinanceRepository(AppDatabase.getInstance(this))
         AttentionMonitor.init(this)
+        HouseholdSync.init(this, repository)
+        BankAutoSync.init(this)
 
         // Retroactively adds any starter category the currently selected/connected bank has
         // that an existing install is still missing (the starter set has grown since some
@@ -68,6 +98,11 @@ class FinanceApp : Application() {
             BankCategories.ensure(repository, SupportedBanks.byId(EnableBankingPrefs.selectedBankId.value))
             CategoryCleanup.migrateLegacyDuplicates(repository)
             FixedExpenseCategories.seedLegacyDefaultsIfNeeded(repository.getCategories())
+        }
+        // Always keep a main account: pick one on first run, when accounts arrive from the bank,
+        // and after the main one is deleted.
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            repository.observeAccounts().collect { runCatching { MainAccountSettings.ensure(repository) } }
         }
 
         // Best-effort sync once per app launch; a no-op inside the worker if not connected.

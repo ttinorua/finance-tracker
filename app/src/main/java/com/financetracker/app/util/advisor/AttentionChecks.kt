@@ -1,5 +1,9 @@
 package com.financetracker.app.util.advisor
 
+import com.financetracker.app.util.LoanSchedule
+import com.financetracker.app.util.Mortgage
+import com.financetracker.app.data.prefs.UserAlert
+import com.financetracker.app.data.prefs.AlertKind
 import com.financetracker.app.data.db.entity.Account
 import com.financetracker.app.data.db.entity.Category
 import com.financetracker.app.data.db.entity.TransactionType
@@ -7,11 +11,16 @@ import com.financetracker.app.data.db.entity.TransactionWithDetails
 import com.financetracker.app.data.prefs.Loan
 import com.financetracker.app.data.prefs.SavingsGoal
 import com.financetracker.app.util.Formatters
+import com.financetracker.app.util.SharedBillsStatus
+import com.financetracker.app.util.findLikelyTransfers
+import com.financetracker.app.util.isHabitCategory
+import com.financetracker.app.util.isSalaryCategory
 import com.financetracker.app.util.isTransferCategory
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /** Most important first. GOOD is good news (a goal reached). */
 enum class AttentionLevel { URGENT, WARNING, INFO, GOOD }
@@ -41,7 +50,25 @@ data class AttentionItem(
     /** What "Ask advisor" / "Fix" sends to the AI advisor. */
     val prompt: String? = null,
     val promptLabel: String = "Ask advisor",
-    val filter: AttentionFilter? = null
+    val filter: AttentionFilter? = null,
+    /** A one-tap fix the app carries out itself (see [AttentionAction]). */
+    val action: AttentionAction? = null
+)
+
+enum class AttentionActionKind {
+    /** Re-categorize [AttentionAction.transactionIds] as "Other (Transfer)". */
+    MARK_TRANSFER,
+    /** Mark the merchant in [AttentionAction.text] as a fixed bill. */
+    MARK_FIXED_MERCHANT
+}
+
+/** A button on an attention card that changes the person's data when tapped: always a
+ * confirmed suggestion, never something done silently. */
+data class AttentionAction(
+    val label: String,
+    val kind: AttentionActionKind,
+    val transactionIds: List<Long> = emptyList(),
+    val text: String? = null
 )
 
 data class BankConsent(val bankName: String, val validUntil: Long?)
@@ -67,7 +94,19 @@ data class AttentionInput(
     val lastSyncFailure: String?,
     val backupEnabled: Boolean,
     val backupLastSuccessAt: Long?,
-    val backupLastError: String?
+    val backupLastError: String?,
+    /** Alerts the person set up (usually by asking the AI advisor). */
+    val userAlerts: List<UserAlert> = emptyList(),
+    /** Merchants confirmed as fixed bills ([com.financetracker.app.data.prefs.FixedMerchants]). */
+    val fixedMerchants: Set<String> = emptySet(),
+    /** The shared bills account's status, when one is set up. */
+    val sharedBills: SharedBillsStatus? = null,
+    val partnerName: String = "",
+    /** When the partner's income was last typed in (Shared bills), for the yearly reminder. */
+    val partnerIncomeUpdatedAt: Long? = null,
+    /** The bills account's name and balance as the partner's phone shares it (for a shared loan
+     * when this phone doesn't have that account). */
+    val sharedAccount: Pair<String, Double>? = null
 )
 
 /**
@@ -86,6 +125,7 @@ object AttentionChecks {
         // Moving money between your own accounts is never a subscription or an unusual payment.
         val payments = all.filter { !isTransferCategory(it.mainCategoryName, it.categoryName) }
         items += budgets(input)
+        items += userAlerts(input)
         items += recurring(input, payments)
         items += unusual(input, payments)
         items += balances(input)
@@ -93,6 +133,8 @@ object AttentionChecks {
         items += loans(input)
         items += connections(input)
         items += uncategorized(input)
+        items += likelyTransfers(input)
+        items += sharedBills(input)
         items += monthlyReview(input, all)
         return items.sortedBy { it.level.ordinal }
     }
@@ -148,11 +190,81 @@ object AttentionChecks {
         return items
     }
 
+    // ---------------------------------------------------------------- the person's own alerts
+
+    private fun userAlerts(input: AttentionInput): List<AttentionItem> {
+        val start = FinanceAnalysis.monthStart(input.now)
+        val month = monthKey(input.now)
+        val items = mutableListOf<AttentionItem>()
+        for (alert in input.userAlerts.filter { it.enabled && it.limit > 0 }) {
+            val scopeName = alert.accountId?.let { id -> input.accounts.firstOrNull { it.id == id }?.name }
+            val expenses = FinanceAnalysis.counted(input.transactions, alert.accountId, input.excludeTransfers, input.shiftSalary, input.mainAccountId)
+                .filter { it.type == TransactionType.EXPENSE }
+            when (alert.kind) {
+                AlertKind.CATEGORY_LIMIT -> {
+                    val categoryId = alert.categoryId ?: continue
+                    val name = input.categories.firstOrNull { it.id == categoryId }?.name ?: alert.categoryName ?: continue
+                    val spent = expenses.filter { it.categoryId == categoryId && it.date >= start }.sumOf { it.amount }
+                    val label = name + (scopeName?.let { " · $it" } ?: "")
+                    val filter = AttentionFilter(name, TransactionType.EXPENSE, categoryId, alert.accountId, thisMonthOnly = true)
+                    val share = spent / alert.limit * 100
+                    when {
+                        spent > alert.limit -> items += AttentionItem(
+                            "alert-over:${alert.id}:$month", AttentionLevel.WARNING,
+                            "$label is over your ${money(input, alert.limit)} alert",
+                            "${money(input, spent)} spent this month (${money(input, spent - alert.limit)} over). You asked to be told.",
+                            notify = true,
+                            prompt = "My $name spending went over the ${money(input, alert.limit)} alert I set. What pushed it over and how can I cut back for the rest of the month?",
+                            filter = filter
+                        )
+                        alert.warnAtPercent != null && share >= alert.warnAtPercent -> items += AttentionItem(
+                            "alert-early:${alert.id}:$month", AttentionLevel.INFO,
+                            "$label at ${pct(share)} of ${money(input, alert.limit)}",
+                            "${money(input, spent)} spent so far this month. Your alert is at ${money(input, alert.limit)}.",
+                            notify = true,
+                            prompt = "I'm at ${pct(share)} of my ${money(input, alert.limit)} alert for $name this month. How do I stay under it?",
+                            filter = filter
+                        )
+                    }
+                }
+                AlertKind.LARGE_PAYMENT -> {
+                    // Only recent payments, so creating an alert doesn't bring up years of old ones.
+                    expenses.filter { it.amount >= alert.limit && input.now - it.date <= 14 * DAY && it.date <= input.now }
+                        .forEach { tx ->
+                            items += AttentionItem(
+                                "alert-big:${alert.id}:${tx.id}", AttentionLevel.INFO,
+                                "Payment over ${money(input, alert.limit)}: ${tx.note.ifBlank { tx.categoryName ?: "a payment" }}",
+                                "${money(input, tx.amount)} on ${date(tx.date)} from ${tx.accountName}.",
+                                notify = true,
+                                prompt = "Tell me about the ${money(input, tx.amount)} payment \"${tx.note}\" on ${date(tx.date)}. Is it a one-off or does it repeat?"
+                            )
+                        }
+                }
+            }
+        }
+        return items
+    }
+
     // ---------------------------------------------------------------- subscriptions & payments
 
     private fun recurring(input: AttentionInput, all: List<TransactionWithDetails>): List<AttentionItem> {
         val items = mutableListOf<AttentionItem>()
-        for (payment in FinanceAnalysis.recurringPayments(all, input.now)) {
+        val payments = FinanceAnalysis.recurringPayments(all, input.now)
+        // A bill-like repeat that isn't fixed yet: suggest it, a few at a time, biggest first.
+        // Weekly repeats and habit categories (groceries, parking, fuel) are routines, not bills.
+        items += payments.filter { p ->
+            p.cadence != FinanceAnalysis.Cadence.WEEKLY && !isHabitCategory(p.category) &&
+                p.merchant !in input.fixedMerchants && p.categoryId !in input.fixedCategoryIds
+        }.take(3).map { p ->
+            AttentionItem(
+                "fixed-suggest:${p.merchant}", AttentionLevel.INFO,
+                "${display(p.merchant)} looks ${p.cadence.label} (${money(input, p.lastAmount)})",
+                "Mark it as a fixed bill to count it in upcoming expenses. Next one around ${date(p.nextDue)}.",
+                notify = false,
+                action = AttentionAction("Mark as fixed", AttentionActionKind.MARK_FIXED_MERCHANT, text = p.merchant)
+            )
+        }
+        for (payment in payments) {
             val change = payment.priceChangePct
             if (change != null && change >= 5 && input.now - payment.lastDate <= 40 * DAY) {
                 items += AttentionItem(
@@ -262,13 +374,44 @@ object AttentionChecks {
 
     private fun loans(input: AttentionInput): List<AttentionItem> = input.loans.flatMap { loan ->
         listOfNotNull(
-            parseDate(loan.nextRateReset)?.takeIf { it - input.now in 0..(60 * DAY) }?.let { reset ->
+            loanPaymentSoon(input, loan),
+            // Every rate reset in the document counts, not just the next one typed in; 3 months' notice.
+            LoanSchedule.nextRateReset(loan, input.now)?.takeIf { it - input.now in 0..(92 * DAY) }?.let { reset ->
                 AttentionItem(
                     "rate-reset:${loan.id}:$reset", AttentionLevel.INFO,
                     "${loan.name}: interest rate resets ${date(reset)}",
-                    "Your rate will be set again then — a good moment to check whether to keep the loan type.",
+                    "Your rate will be set again then" +
+                        (LoanSchedule.debtOn(loan, reset)?.let { " on about ${money(input, it)} of debt" } ?: "") +
+                        " — a good moment to check whether to keep the loan type.",
                     notify = true,
                     prompt = "The interest rate on my loan \"${loan.name}\" resets on ${date(reset)}. What could happen to my payment, and should I consider switching loan type?"
+                )
+            },
+            // A fee discount the lender only guarantees until a date (e.g. KundeKroner).
+            parseDate(loan.discountUntil)?.takeIf { (loan.discountPct ?: 0.0) > 0 && it - input.now in 0..(92 * DAY) }?.let { until ->
+                AttentionItem(
+                    "loan-discount:${loan.id}:$until", AttentionLevel.INFO,
+                    "${loan.name}: ${loan.discountName.ifBlank { "fee discount" }} guaranteed until ${date(until)}",
+                    "After that the lender can change or drop the ${loan.discountPct}% discount, so payments may go up.",
+                    notify = true
+                )
+            },
+            // A home value older than half a year makes friværdi stale.
+            loan.homeValueUpdatedAt?.takeIf { input.now - it > 182 * DAY }?.let { updated ->
+                AttentionItem(
+                    "home-value:${loan.id}:$updated", AttentionLevel.INFO,
+                    "Update your home's value",
+                    "It was last updated ${date(updated)}. Settings > Mortgage uses it for your friværdi.",
+                    notify = false
+                )
+            },
+            // Once a year the årsopgørelse gives the exact debt; the estimate drifts without it.
+            loan.debtAsOf?.takeIf { loan.paymentMerchant.isNotBlank() && input.now - it > 330 * DAY }?.let { asOf ->
+                AttentionItem(
+                    "mortgage-statement:${loan.id}:$asOf", AttentionLevel.INFO,
+                    "${loan.name}: correct the debt with the årsopgørelse",
+                    "The debt has been estimated from payments since ${date(asOf)}. Upload the yearly statement in Settings > Mortgage.",
+                    notify = false
                 )
             },
             parseDate(loan.interestOnlyUntil)?.takeIf { it - input.now in 0..(180 * DAY) }?.let { end ->
@@ -282,6 +425,98 @@ object AttentionChecks {
             }
         )
     }
+
+    /** A week before a planned loan payment: is there enough in the account it's paid from? */
+    private fun loanPaymentSoon(input: AttentionInput, loan: Loan): AttentionItem? {
+        val (due, amount) = Mortgage.nextPayment(loan, input.now)?.takeIf { it.first - input.now in 0..(7 * DAY) } ?: return null
+        // The account it's paid from on this phone, else (a loan shared from the partner's phone)
+        // the bills account's balance as the partner's phone last shared it.
+        val local = loan.paidFromAccountId?.let { id -> input.accounts.firstOrNull { it.id == id } }
+        val accountName = local?.name ?: input.sharedAccount?.first ?: return null
+        val balance = (local?.let { input.balances[it.id] } ?: input.sharedAccount?.second) ?: return null
+        val short = amount - balance
+        return AttentionItem(
+            "loan-payment:${loan.id}:$due", if (short > 0) AttentionLevel.WARNING else AttentionLevel.INFO,
+            "Loan payment ${money(input, amount)} on ${date(due)}",
+            if (short > 0) "$accountName has ${money(input, balance)}: short by ${money(input, short)}. Move the difference before the payment."
+            else "$accountName has ${money(input, balance)}: covered ✓",
+            notify = true
+        )
+    }
+
+    // ---------------------------------------------------------------- shared bills
+
+    private fun sharedBills(input: AttentionInput): List<AttentionItem> {
+        val status = input.sharedBills ?: return emptyList()
+        val partner = input.partnerName.ifBlank { "Partner" }
+        val month = monthKey(input.now)
+        val day = ((input.now - FinanceAnalysis.monthStart(input.now)) / DAY).toInt() + 1
+        val items = mutableListOf<AttentionItem>()
+        status.warnings.forEach { w ->
+            items += AttentionItem(
+                "shared-short:${w.label}:${w.dueDate}", AttentionLevel.WARNING,
+                "${display(w.label)} ${money(input, w.amount)} due ${date(w.dueDate)}",
+                "The bills account will be ${money(input, w.shortBy)} short. Adding ${money(input, w.extraPerMonth)} a month in total until then covers it.",
+                notify = true
+            )
+        }
+        // Give transfers until the 10th before saying anyone is behind.
+        if (day >= 10) {
+            if (status.partnerShortThisMonth > 0) items += AttentionItem(
+                "shared-partner:$month", AttentionLevel.INFO,
+                "$partner is ${money(input, status.partnerShortThisMonth)} short on shared bills",
+                "Paid in ${money(input, status.partnerPaidInThisMonth)} of ${money(input, status.partnerToTransfer)} this month.",
+                notify = false
+            )
+            if (status.myShortThisMonth > 0) items += AttentionItem(
+                "shared-me:$month", AttentionLevel.INFO,
+                "You're ${money(input, status.myShortThisMonth)} short on shared bills",
+                "Paid in ${money(input, status.myPaidInThisMonth)} of ${money(input, status.myToTransfer)} this month.",
+                notify = false
+            )
+        }
+        // 1m: payday — salary landed in the last 3 days and this month's transfer isn't done yet.
+        val paidRecently = input.transactions.any {
+            it.type == TransactionType.INCOME && isSalaryCategory(it.mainCategoryName, it.categoryName) && input.now - it.date in 0..(3 * DAY)
+        }
+        if (paidRecently && status.hasTarget && status.myShortThisMonth > 0) items += AttentionItem(
+            "shared-payday:$month", AttentionLevel.INFO,
+            "Payday: transfer ${money(input, status.myShortThisMonth)} to the bills account",
+            "Your ${(status.myShare * 100).roundToInt()}% share of the shared bills, minus the bills you already paid by card.",
+            notify = true
+        )
+        // 1k: a typed-in income goes stale; once a year, ask to check it.
+        if (!status.partnerConnected) input.partnerIncomeUpdatedAt?.takeIf { input.now - it > 365 * DAY }?.let { at ->
+            items += AttentionItem(
+                "shared-partner-income:$at", AttentionLevel.INFO,
+                "Is $partner's income still ${money(input, status.partnerIncome)}?",
+                "It was typed in ${date(at)}. Update it in Settings > Shared bills so the split stays fair.",
+                notify = false
+            )
+        }
+        if (status.unknown.isNotEmpty()) items += AttentionItem(
+            "shared-unknown:${status.unknown.joinToString(",") { it.transaction.id.toString() }}", AttentionLevel.INFO,
+            "Who sent this? ${status.unknown.size} payment${if (status.unknown.size == 1) "" else "s"} into the bills account",
+            "Open Settings > Shared bills to say who it was from.",
+            notify = false
+        )
+        return items
+    }
+
+    // ---------------------------------------------------------------- transfers
+
+    /** Money that left one account and arrived in another the same day, not yet marked as a
+     * transfer: otherwise it counts as spending on one side and income on the other. */
+    private fun likelyTransfers(input: AttentionInput): List<AttentionItem> =
+        findLikelyTransfers(input.transactions, input.now).take(5).map { pair ->
+            AttentionItem(
+                pair.key, AttentionLevel.INFO,
+                "Looks like a transfer: ${money(input, pair.out.amount)}",
+                "From ${pair.out.accountName} to ${pair.into.accountName} on ${date(pair.out.date)}. Marking it keeps it out of your spending and income.",
+                notify = false,
+                action = AttentionAction("Mark as transfer", AttentionActionKind.MARK_TRANSFER, listOf(pair.out.id, pair.into.id))
+            )
+        }
 
     // ---------------------------------------------------------------- the app itself
 

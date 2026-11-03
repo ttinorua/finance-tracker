@@ -1,8 +1,12 @@
 package com.financetracker.app.ui.screens.settings
 
+import com.financetracker.app.data.prefs.ViewFilter
+import com.financetracker.app.util.CategoryNames
+import com.financetracker.app.data.bank.CategoryMerge
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.financetracker.app.data.prefs.CategoryIconChoices
 import androidx.work.ExistingWorkPolicy
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
@@ -13,9 +17,11 @@ import com.financetracker.app.data.db.entity.Account
 import com.financetracker.app.data.db.entity.Category
 import com.financetracker.app.data.db.entity.TransactionType
 import com.financetracker.app.data.importexport.DuplicateTransactionFilter
+import com.financetracker.app.data.prefs.BankReservations
 import com.financetracker.app.data.prefs.BankScheduledPayments
 import com.financetracker.app.data.prefs.EnableBankingPrefs
 import com.financetracker.app.data.prefs.MainAccountSettings
+import com.financetracker.app.data.prefs.SharedBillsSettings
 import com.financetracker.app.data.repository.FinanceRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -157,12 +163,16 @@ class SettingsViewModel(private val repository: FinanceRepository, private val a
         viewModelScope.launch {
             repository.deleteAccount(account)
             MainAccountSettings.onAccountRemoved(account.id)
+            SharedBillsSettings.onAccountRemoved(account.id)
+            ViewFilter.onAccountRemoved(account.id)
             BankScheduledPayments.onAccountRemoved(account.id)
+            BankReservations.onAccountRemoved(account.id)
         }
     }
 
+    /** There's always a main account, so this only ever moves it; un-ticking the main one does nothing. */
     fun setMainAccount(account: Account, isMain: Boolean) {
-        MainAccountSettings.setMainAccount(if (isMain) account.id else null)
+        if (isMain) MainAccountSettings.setMainAccount(account.id)
     }
 
     /** Moves every transaction on [source] onto [target] — except ones [target] already has an
@@ -202,7 +212,10 @@ class SettingsViewModel(private val repository: FinanceRepository, private val a
             EnableBankingPrefs.remapAccountLink(source.id, target.id)
             repository.deleteAccount(source)
             MainAccountSettings.onAccountRemoved(source.id, replacementId = target.id)
+            SharedBillsSettings.onAccountRemoved(source.id, replacementId = target.id)
+            ViewFilter.onAccountRemoved(source.id, replacementId = target.id)
             BankScheduledPayments.onAccountRemoved(source.id)
+            BankReservations.onAccountRemoved(source.id)
         }
     }
 
@@ -223,9 +236,35 @@ class SettingsViewModel(private val repository: FinanceRepository, private val a
         }
     }
 
-    fun addCategory(mainCategory: String, name: String, type: TransactionType) {
+    fun addCategory(mainCategory: String, name: String, type: TransactionType, icon: String? = null) {
         viewModelScope.launch {
-            repository.upsertCategory(Category(name = name, mainCategory = mainCategory, type = type))
+            val categories = repository.getCategories()
+            // Never a second copy of a category that's already there, under any main category.
+            CategoryNames.existing(categories, name, type)?.let {
+                _categoryMessage.value = "${it.mainCategory} › ${it.name} already exists, so no new category was added."
+                return@launch
+            }
+            val main = CategoryNames.canonicalMain(categories, mainCategory)
+            val id = repository.upsertCategory(Category(name = name.trim(), mainCategory = main, type = type))
+            if (icon != null && id > 0) CategoryIconChoices.set(id, icon)
+        }
+    }
+
+    private val _categoryMessage = MutableStateFlow<String?>(null)
+    /** A one-off note for the Categories page (a refused duplicate, or what a merge did). */
+    val categoryMessage: StateFlow<String?> = _categoryMessage.asStateFlow()
+    fun clearCategoryMessage() { _categoryMessage.value = null }
+
+    /** Duplicate categories right now, refreshed whenever the categories or transactions change. */
+    val duplicateCategories: StateFlow<List<CategoryNames.Duplicate>> =
+        combine(repository.observeCategories(), repository.observeTransactions()) { _, _ -> CategoryMerge.findDuplicates(repository) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun mergeDuplicateCategories() {
+        viewModelScope.launch {
+            val removed = CategoryMerge.mergeAll(repository)
+            _categoryMessage.value = if (removed == 0) "No duplicates left to merge." else
+                "Merged $removed duplicate ${if (removed == 1) "category" else "categories"}. Their transactions and budgets moved over."
         }
     }
 

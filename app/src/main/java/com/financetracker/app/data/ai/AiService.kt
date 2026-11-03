@@ -1,6 +1,7 @@
 package com.financetracker.app.data.ai
 
 import com.anthropic.models.messages.OutputConfig
+import com.financetracker.app.data.ai.chatgpt.ChatGptService
 
 /**
  * The one entry point the rest of the app uses for AI. Each request goes to the first AI in
@@ -24,6 +25,7 @@ object AiService {
                 ).getOrThrow()
                 AiProvider.GEMINI -> GeminiService.ask(key, systemPrompt, userMessage, maxTokens.toInt(), quick)
                 AiProvider.GROQ -> GroqService.ask(key, systemPrompt, userMessage, maxTokens.toInt(), quick)
+                AiProvider.CHATGPT -> ChatGptService.ask(systemPrompt, userMessage, quick)
             }
         }
 
@@ -34,6 +36,7 @@ object AiService {
                 AiProvider.CLAUDE -> ClaudeService.generateInsights(systemPrompt, userMessage, maxTokens).getOrThrow()
                 AiProvider.GEMINI -> GeminiService.generateInsights(key, systemPrompt, userMessage, maxTokens.toInt())
                 AiProvider.GROQ -> GroqService.generateInsights(key, systemPrompt, userMessage, maxTokens.toInt())
+                AiProvider.CHATGPT -> ChatGptService.generateInsights(systemPrompt, userMessage)
             }
             cards.ifEmpty { throw AiRequestException("${provider.label} didn't return any insights.") }
         }

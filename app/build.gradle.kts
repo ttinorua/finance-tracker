@@ -1,3 +1,7 @@
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import java.util.Base64
 import java.util.Properties
 
@@ -41,6 +45,14 @@ val groqApiKey: String = buildSecret("GROQ_API_KEY")?.trim() ?: ""
 val oneDriveClientId: String =
     buildSecret("ONEDRIVE_CLIENT_ID")?.trim() ?: "695700a7-d16d-41f5-96cd-d136232061bc"
 
+// Household budget (shared with a partner) runs on the app's own Firebase project. These identify
+// the project and aren't secret on their own (they ship inside every Firebase app; access is guarded
+// by the Firestore security rules), but they're kept in the build environment rather than in this
+// public repository. Without them the household feature says it isn't set up.
+val firebaseApiKey: String = buildSecret("FIREBASE_API_KEY")?.trim() ?: ""
+val firebaseAppId: String = buildSecret("FIREBASE_APP_ID")?.trim() ?: ""
+val firebaseProjectId: String = buildSecret("FIREBASE_PROJECT_ID")?.trim() ?: ""
+
 val enableBankingApplicationId: String =
     buildSecret("ENABLE_BANKING_APPLICATION_ID")?.trim() ?: "7bf8c383-b4b9-41c5-b126-11cc4f76c1c5"
 val enableBankingPrivateKeyB64: String =
@@ -53,6 +65,11 @@ val enableBankingPrivateKeyB64: String =
         ?: ""
 
 android {
+    lint {
+        // The release build's own quick lint pass ("lintVital", ~2 minutes on the cloud build machine)
+        // repeats what `lintDebug` already checks before every push, so it's skipped.
+        checkReleaseBuilds = false
+    }
     namespace = "com.financetracker.app"
     compileSdk = 34
 
@@ -60,8 +77,11 @@ android {
         applicationId = "com.financetracker.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        // Each build gets its own number from its build time (Danish time), so you can tell which
+        // APK is installed (Settings, at the bottom). The code keeps rising, so updates install.
+        val builtAt = ZonedDateTime.now(ZoneId.of("Europe/Copenhagen"))
+        versionCode = ((builtAt.toEpochSecond() - 1_767_225_600L) / 60).toInt() // minutes since 1 Jan 2026
+        versionName = "1.1 · " + builtAt.format(DateTimeFormatter.ofPattern("d MMM yyyy, HH:mm", Locale.US))
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "ANTHROPIC_API_KEY", "\"$anthropicApiKey\"")
@@ -70,6 +90,9 @@ android {
         buildConfigField("String", "ONEDRIVE_CLIENT_ID", "\"$oneDriveClientId\"")
         buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKey\"")
         buildConfigField("String", "GROQ_API_KEY", "\"$groqApiKey\"")
+        buildConfigField("String", "FIREBASE_API_KEY", "\"$firebaseApiKey\"")
+        buildConfigField("String", "FIREBASE_APP_ID", "\"$firebaseAppId\"")
+        buildConfigField("String", "FIREBASE_PROJECT_ID", "\"$firebaseProjectId\"")
     }
 
     // The app's permanent signing key. Android only installs an update signed with the same key as
@@ -95,7 +118,11 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true
+            // Code shrinking (R8) is off: on the 4-core cloud build machine it took over an
+            // hour for this app (mostly the big Apache POI spreadsheet library), and it has caused
+            // several bugs that only showed up in the installed app. The cost is a bigger APK.
+            // The rules in proguard-rules.pro stay in case shrinking is turned back on.
+            isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -151,6 +178,11 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.navigation:navigation-compose:2.8.0")
 
+    // Company/bank logos on transactions and bank connections
+    implementation("io.coil-kt:coil-compose:2.7.0")
+    // Reads which way up a chosen photo is, for logos from the phone's pictures.
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
+
     // Room
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
@@ -158,6 +190,12 @@ dependencies {
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
+
+    // Firebase: the household budget shared with a partner (anonymous sign-in + Firestore).
+    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+    implementation("com.google.firebase:firebase-auth")
+    implementation("com.google.firebase:firebase-firestore")
 
     // WorkManager: lets the AI categorization backfill keep running (and be observed) across
     // navigation, screen-off, and app backgrounding instead of dying with the ViewModel.
@@ -179,10 +217,20 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // The real org.json for JVM unit tests (Android's own copy is a stub there).
     testImplementation("org.json:json:20240303")
+    // Runs database upgrade tests on the JVM against a real SQLite.
+    testImplementation("org.robolectric:robolectric:4.13")
+    testImplementation("androidx.test:core:1.6.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation(platform("androidx.compose:compose-bom:2024.09.00"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+// Robolectric downloads its Android runtime jar itself (not through the repositories in
+// settings.gradle.kts); point it at Google's copy of Maven Central too, which doesn't turn fresh
+// cloud build machines away with HTTP 429 the way Maven Central does.
+tasks.withType<Test>().configureEach {
+    systemProperty("robolectric.dependency.repo.url", "https://maven-central.storage-download.googleapis.com/maven2/")
 }

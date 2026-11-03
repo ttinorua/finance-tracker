@@ -1,5 +1,8 @@
 package com.financetracker.app.ui.components
 
+import androidx.compose.ui.graphics.Color
+import com.financetracker.app.ui.theme.appBackdrop
+import com.financetracker.app.ui.theme.LocalAppPalette
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -11,6 +14,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -20,12 +25,12 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AddCircle
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CardDefaults
@@ -48,6 +53,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.financetracker.app.data.db.entity.Category
@@ -75,41 +81,46 @@ fun CategoryGroupHeader(
     onToggle: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val container = if (expanded) CardDefaults.cardColors().containerColor else MaterialTheme.colorScheme.primaryContainer
-    val content = if (expanded) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onPrimaryContainer
+    val palette = LocalAppPalette.current
     Row(
         modifier = modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(container)
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+            // An open group is lightly tinted in its own colour.
+            .background(if (expanded) palette.readable(CategoryIcons.mainColour(title)).copy(alpha = .08f) else Color.Transparent)
             .clickable(onClickLabel = if (expanded) "Collapse" else "Expand", onClick = onToggle)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .padding(start = 12.dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            imageVector = if (expanded) Icons.Filled.Remove else Icons.Filled.AddCircle,
-            contentDescription = null,
-            tint = content,
-            modifier = Modifier.size(22.dp)
-        )
+        MainCategoryIconTile(title)
         Text(
             text = title,
-            style = MaterialTheme.typography.titleMedium,
-            color = content,
+            style = MaterialTheme.typography.titleSmall.copy(fontSize = 15.sp),
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier
                 .weight(1f)
-                .padding(start = 12.dp, end = 8.dp)
+                .padding(start = 13.dp, end = 8.dp)
         )
         Box(
             modifier = Modifier
-                .size(26.dp)
-                .border(1.5.dp, content, CircleShape),
+                .heightIn(min = 22.dp)
+                .widthIn(min = 26.dp)
+                .clip(RoundedCornerShape(11.dp))
+                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = .07f))
+                .padding(horizontal = 7.dp),
             contentAlignment = Alignment.Center
         ) {
-            Text("$count", style = MaterialTheme.typography.labelMedium, color = content)
+            Text("$count", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        Icon(
+            imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 8.dp).size(22.dp)
+        )
     }
 }
 
@@ -167,7 +178,7 @@ fun CategoryPickerDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
-        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Surface(modifier = Modifier.fillMaxSize().appBackdrop(LocalAppPalette.current), color = Color.Transparent) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -214,7 +225,7 @@ fun CategoryPickerDialog(
                         itemsIndexed(standalone, key = { _, filter -> filter.encode() }) { index, filter ->
                             PickerRow(
                                 text = filter.label,
-                                colorHex = null,
+                                leading = null,
                                 selected = selected == filter,
                                 emphasized = true,
                                 showDivider = index < standalone.lastIndex,
@@ -258,7 +269,9 @@ fun CategoryPickerDialog(
                                 val isLastRow = index == rows.lastIndex
                                 PickerRow(
                                     text = if (row is CategoryFilter.Main) "All of $main" else row.label,
-                                    colorHex = (row as? CategoryFilter.Single)?.let { colorById[it.categoryId] },
+                                    leading = (row as? CategoryFilter.Single)?.let { single ->
+                                        { CategoryIconTile(single.categoryId, single.name, main, colorById[single.categoryId], size = 30.dp) }
+                                    },
                                     selected = selected == row ||
                                         (row is CategoryFilter.Single && selected is CategoryFilter.Single &&
                                             selected.categoryId == row.categoryId),
@@ -279,7 +292,7 @@ fun CategoryPickerDialog(
 @Composable
 private fun PickerRow(
     text: String,
-    colorHex: String?,
+    leading: (@Composable () -> Unit)?,
     selected: Boolean,
     emphasized: Boolean,
     showDivider: Boolean,
@@ -294,12 +307,10 @@ private fun PickerRow(
             .clickable(onClick = onClick)
     ) {
         Row(
-            modifier = Modifier.padding(start = 20.dp, end = 16.dp, top = 14.dp, bottom = 14.dp),
+            modifier = Modifier.padding(start = 20.dp, end = 16.dp, top = 10.dp, bottom = 10.dp).heightIn(min = 30.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (colorHex != null) {
-                CategoryColorDot(colorHex, modifier = Modifier.size(10.dp))
-            }
+            leading?.invoke()
             Text(
                 text = text,
                 style = MaterialTheme.typography.bodyLarge,
@@ -309,7 +320,7 @@ private fun PickerRow(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .weight(1f)
-                    .padding(start = if (colorHex != null) 12.dp else 0.dp, end = 8.dp)
+                    .padding(start = if (leading != null) 12.dp else 0.dp, end = 8.dp)
             )
             if (selected) {
                 Icon(
@@ -346,7 +357,7 @@ fun CategoryPickerField(
             onValueChange = {},
             readOnly = true,
             label = { Text(label) },
-            leadingIcon = selected?.let { { CategoryColorDot(it.colorHex, modifier = Modifier.size(12.dp)) } },
+            leadingIcon = selected?.let { { CategoryIconTile(it.id, it.name, it.mainCategory, it.colorHex, size = 28.dp) } },
             trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null) },
             modifier = Modifier.fillMaxWidth()
         )
