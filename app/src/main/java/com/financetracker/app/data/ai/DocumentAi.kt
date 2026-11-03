@@ -50,7 +50,7 @@ object DocumentAi {
 
     /** Reads [uris] with [prompt] as the instructions and [ask] as the request; tries each AI in
      * the user's order until one answers. */
-    suspend fun read(context: Context, uris: List<Uri>, prompt: String, ask: String, maxTokens: Int): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun read(context: Context, uris: List<Uri>, prompt: String, ask: String, maxTokens: Int, readTimeoutMs: Int = 90_000): Result<String> = withContext(Dispatchers.IO) {
         val providers = readers()
         if (providers.isEmpty()) {
             return@withContext Result.failure(AiRequestException("Reading documents needs Gemini or Claude. Add a key in Settings > AI assistant."))
@@ -64,7 +64,7 @@ object DocumentAi {
         for (provider in providers) {
             try {
                 val text = when (provider) {
-                    AiProvider.GEMINI -> readWithGemini(AiSettings.keyFor(provider) ?: continue, parts, prompt, ask, maxTokens)
+                    AiProvider.GEMINI -> readWithGemini(AiSettings.keyFor(provider) ?: continue, parts, prompt, ask, maxTokens, readTimeoutMs)
                     else -> readWithClaude(parts, prompt, ask, maxTokens)
                 }
                 return@withContext Result.success(text)
@@ -105,14 +105,14 @@ object DocumentAi {
         return Part("image/jpeg", Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP))
     }
 
-    private fun readWithGemini(key: String, parts: List<Part>, prompt: String, ask: String, maxTokens: Int): String {
+    private fun readWithGemini(key: String, parts: List<Part>, prompt: String, ask: String, maxTokens: Int, readTimeoutMs: Int): String {
         val body = GeminiService.request(prompt, listOf(ChatTurn(isUser = true, text = prompt)), maxTokens, quick = false)
         val content = JSONArray()
         parts.forEach { content.put(JSONObject().put("inlineData", JSONObject().put("mimeType", it.mimeType).put("data", it.base64))) }
         content.put(JSONObject().put("text", ask))
         body.put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", content)))
         body.getJSONObject("generationConfig").put("responseMimeType", "application/json")
-        val response = GeminiService.send(key, body)
+        val response = GeminiService.send(key, body, readTimeoutMs)
         return GeminiService.parts(response).filter { !it.optBoolean("thought") }.joinToString("") { it.optString("text") }
     }
 

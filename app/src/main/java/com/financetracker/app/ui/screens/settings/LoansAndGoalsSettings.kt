@@ -260,6 +260,12 @@ internal fun LoanDialog(loan: Loan, accounts: List<AccountUi>, isNew: Boolean, o
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
+                if (draft.schedule.isNotEmpty()) {
+                    var showTable by remember { mutableStateOf(false) }
+                    ScheduleCheck(draft) { draft = it }
+                    TextButton(onClick = { showTable = true }) { Text("View the payment table") }
+                    if (showTable) LoanScheduleDialog(draft, currency) { showTable = false }
+                }
                 Field("Name", draft.name) { draft = draft.copy(name = it) }
                 Field("Lender", draft.lender) { draft = draft.copy(lender = it) }
                 Row(
@@ -343,6 +349,13 @@ internal fun LoanDialog(loan: Loan, accounts: List<AccountUi>, isNew: Boolean, o
                 NumberField("Years left", draft.yearsLeft) { draft = draft.copy(yearsLeft = it) }
                 Field("Rate type (fixed / variable)", draft.rateType) { draft = draft.copy(rateType = it) }
                 Field("Next rate reset", draft.nextRateReset) { draft = draft.copy(nextRateReset = it) }
+                ListField("All rate resets (YYYY-MM-DD, comma between)", draft.rateResets.joinToString(", ")) {
+                    draft = draft.copy(rateResets = it.split(',').map(String::trim).filter(String::isNotEmpty))
+                }
+                Field("Fee discount (e.g. KundeKroner)", draft.discountName) { draft = draft.copy(discountName = it) }
+                NumberField("Fee discount (% a year of the debt)", draft.discountPct) { draft = draft.copy(discountPct = it) }
+                Field("Discount guaranteed until", draft.discountUntil) { draft = draft.copy(discountUntil = it) }
+                NumberField("Tax deduction on interest & fee (%)", draft.taxDeductionPct) { draft = draft.copy(taxDeductionPct = it) }
                 Field("Interest-only until", draft.interestOnlyUntil) { draft = draft.copy(interestOnlyUntil = it) }
                 Field("Ends", draft.endDate) { draft = draft.copy(endDate = it) }
                 Field("Early repayment terms", draft.earlyRepayment, singleLine = false) { draft = draft.copy(earlyRepayment = it) }
@@ -521,6 +534,16 @@ private fun Field(label: String, value: String, singleLine: Boolean = true, onCh
         singleLine = singleLine,
         modifier = Modifier.fillMaxWidth()
     )
+}
+
+/** A comma-separated list: keeps what's typed (separators too) while the parsed value updates. */
+@Composable
+private fun ListField(label: String, initial: String, onChange: (String) -> Unit) {
+    var text by remember { mutableStateOf(initial) }
+    Field(label, text) {
+        text = it
+        onChange(it)
+    }
 }
 
 /** A number field that accepts both 1234.5 and Danish 1.234,5. */

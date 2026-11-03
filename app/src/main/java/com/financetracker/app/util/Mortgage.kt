@@ -71,12 +71,21 @@ object Mortgage {
      * build's per-payment amount spread out, else worked out from the debt and the end date.
      */
     fun plannedMonthly(loan: Loan, now: Long): Double? {
+        scheduleMonthly(loan, now)?.let { return it }
         loan.monthlyPayment?.takeIf { it > 0 }?.let { return it }
         loan.paymentAmount?.takeIf { it > 0 }?.let { return it / periodMonths(loan) }
         val debt = loan.remainingDebt ?: return null
         val end = endDateOf(loan) ?: return null
         val months = monthsBetween(now, end).takeIf { it > 0 } ?: return null
         return paymentFor(debt, interestRateOf(loan), months) + debt * contributionRateOf(loan) / 12
+    }
+
+    /** From the lender's table: the next full payment (not a short first one), per month. */
+    private fun scheduleMonthly(loan: Loan, now: Long): Double? {
+        if (loan.schedule.isEmpty()) return null
+        val upcoming = LoanSchedule.payments(loan).filter { it.date >= now - DAY }
+        val full = upcoming.firstOrNull { it.index > 0 } ?: upcoming.firstOrNull() ?: return null
+        return full.youPay / periodMonths(loan)
     }
 
     /** A full payment (a quarterly one is three months' worth). */
@@ -93,6 +102,7 @@ object Mortgage {
 
     /** What the payment on [due] costs: the months it covers times the cost per month (the first one's exact amount when given). */
     fun paymentOn(loan: Loan, due: Long, now: Long): Double? {
+        LoanSchedule.payments(loan).firstOrNull { Math.abs(it.date - due) <= DAY }?.let { return it.youPay }
         val first = AttentionChecks.parseDate(loan.firstPaymentDate)
         if (first != null && Math.abs(due - first) <= DAY) loan.firstPaymentAmount?.takeIf { it > 0 }?.let { return it }
         return plannedMonthly(loan, now)?.times(monthsCovered(loan, due))
@@ -106,6 +116,8 @@ object Mortgage {
 
     /** The next payment date on or after today, from the first payment date and the rhythm. */
     fun nextPaymentDate(loan: Loan, now: Long): Long? {
+        // The lender's table has the real dates (e.g. the 11th of Mar/Jun/Sep/Dec).
+        if (loan.schedule.isNotEmpty()) return LoanSchedule.nextPayment(loan, now)?.date
         val first = AttentionChecks.parseDate(loan.firstPaymentDate) ?: return null
         val today = now - Math.floorMod(now, DAY)
         val period = periodMonths(loan)
@@ -161,7 +173,7 @@ object Mortgage {
         if (loan.paymentMerchant.isNotBlank()) return null
         // A loan shared from the partner's phone without the account here: that phone links it.
         if (loan.paidFromAccountId == null && loan.sharedBy.isNotBlank()) return null
-        val firstDate = AttentionChecks.parseDate(loan.firstPaymentDate)
+        val firstDate = LoanSchedule.payments(loan).firstOrNull()?.date ?: AttentionChecks.parseDate(loan.firstPaymentDate)
         val planned = (firstDate?.let { paymentOn(loan, it, now) } ?: plannedPayment(loan, now)) ?: return null
         val from = firstDate?.minus(21 * DAY) ?: loan.debtAsOf ?: return null
         val lender = loan.lender.lowercase().split(Regex("[^a-zæøå0-9]+")).filter { it.length >= 4 && it != "bank" }
@@ -216,13 +228,41 @@ object Mortgage {
         // alone, and bidrag on the debt comes on top of it.
         val monthsLeft = endDateOf(loan)?.let { monthsBetween(now, it) }
             ?: monthsToPayOff(debt, interestRateOf(loan), monthly - debt * contribution / 12)
-        return MortgageStatus(
+        val estimated = MortgageStatus(
             debt = debt,
             monthlyPayment = monthly,
             year = MortgageYear(paidSum, interestSum, contributionSum, repaymentSum),
             monthsLeft = monthsLeft,
             lastPaymentDate = all.lastOrNull()?.date,
             paymentsSinceExact = after.size
+        )
+        return fromSchedule(loan, estimated, now)
+    }
+
+    /**
+     * With the lender's table, the debt, this year's split and the months left come from it
+     * instead of estimates, until a rate reset has passed (the table's figures after that are
+     * only the lender's guess, so the payments themselves are followed again).
+     */
+    private fun fromSchedule(loan: Loan, estimated: MortgageStatus, now: Long): MortgageStatus {
+        val rows = LoanSchedule.payments(loan)
+        if (rows.isEmpty()) return estimated
+        val last = LoanSchedule.lastPayment(loan, now)
+        if (last?.estimate == true) return estimated
+        val year = LoanSchedule.yearOf(now)
+        val paid = rows.filter { it.date < now && LoanSchedule.yearOf(it.date) == year }
+        val end = rows.last().date
+        return estimated.copy(
+            debt = last?.debtAfter ?: loan.originalAmount ?: estimated.debt,
+            monthlyPayment = scheduleMonthly(loan, now) ?: estimated.monthlyPayment,
+            year = MortgageYear(
+                paid = paid.sumOf { it.youPay },
+                interest = paid.sumOf { it.interest ?: it.interestAndFee },
+                contribution = paid.sumOf { (it.fee ?: 0.0) - it.discount },
+                repayment = paid.sumOf { it.principal }
+            ),
+            monthsLeft = monthsBetween(now, end),
+            lastPaymentDate = estimated.lastPaymentDate ?: last?.date
         )
     }
 
@@ -280,7 +320,8 @@ object Mortgage {
     /** Friværdi: the home's value minus the debt (the whole, before any ownership share). */
     fun equity(loan: Loan, status: MortgageStatus): Double? = loan.homeValue?.let { it - status.debt }
 
-    fun afterTax(year: MortgageYear): Double = (year.interest + year.contribution) * (1 - TAX_DEDUCTION_RATE)
+    fun afterTax(year: MortgageYear, loan: Loan? = null): Double =
+        (year.interest + year.contribution) * (1 - (loan?.let(LoanSchedule::taxRate) ?: TAX_DEDUCTION_RATE))
 
     /** [now] plus [months] months, for the debt-free date. */
     fun dateAfter(now: Long, months: Int): Long = Calendar.getInstance(utc).apply { timeInMillis = now; add(Calendar.MONTH, months) }.timeInMillis
