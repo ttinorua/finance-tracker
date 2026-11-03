@@ -274,7 +274,7 @@ fun MortgagePage(accountList: List<AccountUi>) {
                 scheduled.interest?.let { LineRow("Interest", money(it)) }
                 scheduled.fee?.let { LineRow("Administration fee (bidrag)", money(it)) }
                 if (scheduled.interest == null) LineRow("Interest & fee", money(scheduled.interestAndFee))
-                LineRow("Repayment (afdrag)", money(scheduled.principal))
+                LineRow("Principal (afdrag)", money(scheduled.principal))
                 if (scheduled.discount > 0) {
                     LineRow("${loan.discountName.ifBlank { "Discount" }} off the fee", "−" + money(scheduled.discount))
                     Text("Payment in the lender's table: ${money(scheduled.bankPayment)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -307,12 +307,12 @@ fun MortgagePage(accountList: List<AccountUi>) {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Figure("Interest", money(status.year.interest), Modifier.weight(1f))
                     Figure("Admin fee (bidrag)", money(status.year.contribution), Modifier.weight(1f))
-                    Figure("Repayment (afdrag)", money(status.year.repayment), Modifier.weight(1f))
+                    Figure("Principal (afdrag)", money(status.year.repayment), Modifier.weight(1f))
                 }
-                Text("The repayment is the part that lowers your debt. Estimated from the rates.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("The principal is the part that lowers your debt. Estimated from the rates, or from the lender's table when added.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
                 Text(
-                    "Nothing yet. After the first payment you'll see the split into interest, administration fee (bidrag) and repayment (afdrag), the part that lowers the debt.",
+                    "Nothing yet. After the first payment you'll see the split into interest, administration fee (bidrag) and principal (afdrag), the part that lowers the debt.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
