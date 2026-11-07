@@ -308,4 +308,30 @@ class SharedBillsTest {
         assertTrue(FinanceAnalysis.newFixedBills(txs, setOf(7L), emptySet(), now).isEmpty())
         assertEquals(1, FinanceAnalysis.newFixedBills(txs.takeLast(2), setOf(7L), emptySet(), now).size)
     }
+
+    @Test
+    fun `the page keeps 26 months, or back to the start of the split`() {
+        val old = tx(mine, 50.0, TransactionType.EXPENSE, utc(2024, 7, 15), "Old shop")
+        val kept = tx(mine, 50.0, TransactionType.EXPENSE, utc(2024, 8, 1), "Kept shop")
+        val txs = listOf(old, kept) + netflix()
+        // 26 months before October 2026 is August 2024.
+        assertEquals(txs - old, SharedBills.recentHistory(txs, now, null, null))
+        // A split started earlier keeps everything since then.
+        assertEquals(txs, SharedBills.recentHistory(txs, now, utc(2024, 7, 1), null))
+        assertEquals(txs, SharedBills.recentHistory(txs, now, null, "2024-07"))
+    }
+
+    @Test
+    fun `a yearly bill is still found within 26 months`() {
+        val insurance = (2024..2026).map { tx(mine, 3600.0, TransactionType.EXPENSE, utc(it, 9, 10), "Tryg", "Insurance", "Insurance") }
+        val c = SharedBills.candidates(SharedBills.recentHistory(insurance, now, null, null), bills, emptySet(), now, emptySet())
+        assertEquals(300.0, c.single { it.merchant.contains("tryg") }.monthly, 0.0)
+    }
+
+    @Test
+    fun `the tick list reuses the bills worked out with the split`() {
+        val txs = newAccount() + netflix()
+        val s = SharedBills.status(input(txs))
+        assertEquals(SharedBills.candidates(txs, bills, emptySet(), now), s.candidates)
+    }
 }

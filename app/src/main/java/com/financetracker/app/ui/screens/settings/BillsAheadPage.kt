@@ -20,6 +20,10 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
+import com.financetracker.app.data.prefs.FixedExpenseCategories
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -80,25 +84,36 @@ fun BillsAheadPage(accounts: List<Account>) {
         return
     }
     val repository = (LocalContext.current.applicationContext as FinanceApp).repository
-    val transactions by remember { repository.observeTransactions() }.collectAsState(initial = emptyList())
+    // Null until the transactions have loaded, so no figures are worked out from nothing.
+    val loaded by remember { repository.observeTransactions() }.collectAsState(initial = null)
     val fixedMerchants by FixedMerchants.merchants.collectAsState()
     val account = accounts.firstOrNull { it.id == setup.accountId }
-    var balance by remember { mutableStateOf(0.0) }
-    LaunchedEffect(account, transactions) { balance = account?.let { repository.getAccountBalance(it) } ?: 0.0 }
     val now = remember { System.currentTimeMillis() }
     val loans by LoansAndGoals.loans.collectAsState()
     var includeTicked by remember { mutableStateOf(true) }
-    val view = remember(transactions, setup, balance, fixedMerchants, household.partnerSharedBills, loans, includeTicked, account) {
-        val input = SharedBillsInput(
-            setup.accountId!!, transactions, balance, SharedBills.averageNetSalary(transactions, now), setup.partnerNetIncome,
-            setup.partnerName, setup.answers, setup.sharedMerchants, fixedMerchants, setup.partnerBills, setup.lockedMySharePct,
-            setup.startedAt, setup.history, household.partnerSharedBills?.side, now, Mortgage.plannedBills(loans, setup.accountId, now),
-            setup.fixed?.plan?.let { it.mine to it.partner }
-        )
-        SharedBills.aheadView(input, account?.name ?: "Bills account", includeTicked)
+    val partnerReport = household.partnerSharedBills
+    // Worked out in the background, and reused when opened again with nothing changed.
+    val computed by produceState<AheadView?>(null, loaded, setup, fixedMerchants, partnerReport, loans, includeTicked, account) {
+        val transactions = loaded ?: return@produceState
+        val balance = account?.let { repository.getAccountBalance(it) } ?: 0.0
+        val key = listOf(setup, balance, partnerReport, fixedMerchants, loans, includeTicked, FixedExpenseCategories.fixedCategoryIds.value, now / DAY_MS, transactions)
+        AheadCache.lastFor(key)?.let { value = it; return@produceState }
+        value = withContext(Dispatchers.Default) {
+            val history = SharedBills.recentHistory(transactions, now, setup.startedAt, setup.fixed?.since)
+            val input = SharedBillsInput(
+                setup.accountId!!, history, balance, SharedBills.averageNetSalary(history, now), setup.partnerNetIncome,
+                setup.partnerName, setup.answers, setup.sharedMerchants, fixedMerchants, setup.partnerBills, setup.lockedMySharePct,
+                setup.startedAt, setup.history, partnerReport?.side, now, Mortgage.plannedBills(loans, setup.accountId, now),
+                setup.fixed?.plan?.let { it.mine to it.partner }
+            )
+            SharedBills.aheadView(input, account?.name ?: "Bills account", includeTicked)
+        }.also { AheadCache.remember(key, it) }
     }
+    val view = computed ?: run { Loading(); return }
     AheadContent(view, includeTicked, onIncludeTicked = { includeTicked = it })
 }
+
+private val AheadCache = LastResult<AheadView>()
 
 /** The Bills ahead screen for [view]; [onIncludeTicked] null = shared from the partner's phone (view only). */
 @Composable
@@ -204,6 +219,12 @@ private fun AheadContent(view: AheadView, includeTicked: Boolean, onIncludeTicke
                         "Reached ✓",
                         "You already have ${oneDecimal(BillsAhead.lastsMonths(balance, billsWhatIf.toDouble()).coerceAtMost(99.0))} months of bills in the account.",
                         palette.positive
+                    )
+                    // Over 10 years: the transfers only just cover the bills, so say that instead of a huge number.
+                    n != null && n > 120 -> Triple(
+                        "Not really at this rate",
+                        "The transfers only leave ${money(net)} a month over the bills. Transfer a bit more to build up ${money(goal - balance)}.",
+                        MaterialTheme.colorScheme.error
                     )
                     n != null -> Triple(
                         "$n month${if (n == 1) "" else "s"} to go",

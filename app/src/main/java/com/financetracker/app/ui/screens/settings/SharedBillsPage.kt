@@ -34,6 +34,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.foundation.layout.size
+import com.financetracker.app.util.SharedCandidate
+import kotlinx.coroutines.Dispatchers
+import com.financetracker.app.data.prefs.FixedExpenseCategories
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -95,13 +102,20 @@ fun SharedBillsPage(accounts: List<Account>) {
     val household by HouseholdSync.state.collectAsState()
     var editing by remember { mutableStateOf(false) }
     val repository = (LocalContext.current.applicationContext as FinanceApp).repository
-    val transactions by remember { repository.observeTransactions() }.collectAsState(initial = emptyList())
+    // Null until the transactions have loaded, so the page never shows figures worked out from nothing.
+    val loaded by remember { repository.observeTransactions() }.collectAsState(initial = null)
+    val transactions = loaded.orEmpty()
     val fixedMerchants by FixedMerchants.merchants.collectAsState()
     val currency by CurrencySettings.currencyCode.collectAsState()
     val now = remember { System.currentTimeMillis() }
     // Whole kroner here: these are amounts to transfer, øre only add noise.
     fun money(v: Double) = Formatters.whole(v) + " " + Formatters.currencySymbol(currency)
     val partnerReport = household.partnerSharedBills
+
+    if (loaded == null && setup.isSetUp && !editing) {
+        Loading()
+        return
+    }
 
     if (editing || !setup.isSetUp) {
         // The partner's phone: show the split as the other phone sees it, and let them tick their own bills.
@@ -120,22 +134,28 @@ fun SharedBillsPage(accounts: List<Account>) {
     }
 
     val account = accounts.firstOrNull { it.id == setup.accountId }
-    var balance by remember { mutableStateOf(0.0) }
-    LaunchedEffect(account, transactions) {
-        balance = account?.let { repository.getAccountBalance(it) } ?: 0.0
-    }
-    val myIncome = remember(transactions) { SharedBills.averageNetSalary(transactions, now) }
     val loans by LoansAndGoals.loans.collectAsState()
-    val status = remember(transactions, setup, balance, partnerReport, fixedMerchants, loans) {
-        SharedBills.status(
-            SharedBillsInput(
-                setup.accountId!!, transactions, balance, myIncome, setup.partnerNetIncome, setup.partnerName, setup.answers,
-                setup.sharedMerchants, fixedMerchants, setup.partnerBills, setup.lockedMySharePct, setup.startedAt, setup.history,
-                partnerReport?.side, now, Mortgage.plannedBills(loans, setup.accountId, now),
-                setup.fixed?.plan?.let { it.mine to it.partner }, setup.fixed?.since
+    // Worked out in the background: going through every transaction is too slow for the screen's
+    // own thread. The last figures stay on screen while new ones are worked out.
+    val computed by produceState<Pair<Double, SharedBillsStatus>?>(null, account, transactions, setup, partnerReport, fixedMerchants, loans) {
+        val balance = account?.let { repository.getAccountBalance(it) } ?: 0.0
+        // Opened again with nothing changed (same day, same transactions and settings): reuse the last figures.
+        val key = listOf(setup, balance, partnerReport, fixedMerchants, loans, FixedExpenseCategories.fixedCategoryIds.value, now / DAY_MS, transactions)
+        StatusCache.lastFor(key)?.let { value = it; return@produceState }
+        value = withContext(Dispatchers.Default) {
+            val history = SharedBills.recentHistory(transactions, now, setup.startedAt, setup.fixed?.since)
+            val myIncome = SharedBills.averageNetSalary(history, now)
+            balance to SharedBills.status(
+                SharedBillsInput(
+                    setup.accountId!!, history, balance, myIncome, setup.partnerNetIncome, setup.partnerName, setup.answers,
+                    setup.sharedMerchants, fixedMerchants, setup.partnerBills, setup.lockedMySharePct, setup.startedAt, setup.history,
+                    partnerReport?.side, now, Mortgage.plannedBills(loans, setup.accountId, now),
+                    setup.fixed?.plan?.let { it.mine to it.partner }, setup.fixed?.since
+                )
             )
-        )
+        }.also { StatusCache.remember(key, it) }
     }
+    val (balance, status) = computed ?: run { Loading(); return }
     // 1l: keep this month's targets, so later changes don't rewrite it once it's over.
     LaunchedEffect(status.myTarget, status.partnerTarget) {
         if (status.hasTarget) SharedBillsSettings.recordMonth(SharedBills.monthKey(now), status.myTarget, status.partnerTarget)
@@ -265,7 +285,7 @@ fun SharedBillsPage(accounts: List<Account>) {
             Line("Total", "", money(status.monthlyBills), bold = true)
         }
 
-        MyBillsTicks(transactions, setup.accountId, setup.sharedMerchants, fixedMerchants, now, ::money, status.movedToBudget, account?.name)
+        MyBillsTicks(transactions, setup.accountId, setup.sharedMerchants, fixedMerchants, now, ::money, status.movedToBudget, account?.name, status.candidates)
 
         if (status.depositsThisMonth.isNotEmpty()) {
             Section("Money in this month") {
@@ -299,6 +319,31 @@ fun SharedBillsPage(accounts: List<Account>) {
     }
 }
 
+internal const val DAY_MS = 24L * 60 * 60 * 1000
+
+/**
+ * The last figures a page worked out, kept while the app runs, so opening it again is instant.
+ * They're reused only when everything they were worked out from is the same, on the same day.
+ */
+internal class LastResult<T : Any> {
+    private var key: Any? = null
+    private var value: T? = null
+
+    @Synchronized fun lastFor(key: Any): T? = value?.takeIf { this.key == key }
+    @Synchronized fun remember(key: Any, value: T) { this.key = key; this.value = value }
+}
+
+private val StatusCache = LastResult<Pair<Double, SharedBillsStatus>>()
+
+/** While the transactions load and the figures are worked out. */
+@Composable
+internal fun Loading() {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(vertical = 24.dp)) {
+        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+        Text("Working out the bills…", style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
 /** Your recurring card bills, each with a "Shared" tick: ticked ones count in the bill total and
  * as money you've already paid. */
 @Composable
@@ -310,13 +355,20 @@ private fun MyBillsTicks(
     now: Long,
     money: (Double) -> String,
     movedToBudget: List<String> = emptyList(),
-    accountName: String? = null
+    accountName: String? = null,
+    /** Already worked out with the split; the partner's phone works them out here. */
+    known: List<SharedCandidate>? = null
 ) {
-    val candidates = remember(transactions, billsAccountId, fixedMerchants, shared) {
-        SharedBills.candidates(transactions, billsAccountId ?: -1L, fixedMerchants + shared, now)
+    val found by produceState(known, known, transactions, billsAccountId, fixedMerchants, shared) {
+        if (known != null) { value = known; return@produceState }
+        value = withContext(Dispatchers.Default) {
+            SharedBills.candidates(SharedBills.recentHistory(transactions, now, null, null), billsAccountId ?: -1L, fixedMerchants + shared, now)
+        }
     }
     Section("Your recurring bills · tick the shared ones") {
-        if (candidates.isEmpty()) Text("No recurring bills found on your accounts yet.", style = MaterialTheme.typography.bodySmall)
+        if (found == null) Text("Finding your recurring bills…", style = MaterialTheme.typography.bodySmall)
+        val candidates = found.orEmpty()
+        if (found != null && candidates.isEmpty()) Text("No recurring bills found on your accounts yet.", style = MaterialTheme.typography.bodySmall)
         candidates.forEach { c ->
             Row(
                 verticalAlignment = Alignment.CenterVertically,

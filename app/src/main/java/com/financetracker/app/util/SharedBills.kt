@@ -159,7 +159,9 @@ data class SharedBillsStatus(
     val fixedMonths: Int = 0,
     /** Which of each person's own-account shared bills have been paid this month (by name). */
     val myOwnPaidThisMonth: Set<String> = emptySet(),
-    val partnerOwnPaidThisMonth: Set<String> = emptySet()
+    val partnerOwnPaidThisMonth: Set<String> = emptySet(),
+    /** Your recurring bills to tick, worked out once here so the tick list can reuse them. */
+    val candidates: List<SharedCandidate> = emptyList()
 ) {
     val partnerShare: Double get() = 1 - myShare
     val hasTarget: Boolean get() = monthlyBills > 0
@@ -221,6 +223,22 @@ object SharedBills {
     private fun roundTo10(v: Double): Double = (v / 10).roundToLong() * 10.0
 
     /** "yyyy-MM" → the start of that month (UTC). */
+    /** History the Shared bills page needs: 26 months is enough to see a yearly bill 3 times. */
+    const val HISTORY_MONTHS = 26
+
+    /**
+     * The transactions from the last [HISTORY_MONTHS] months, and everything since the split
+     * ([startedAt]) or the fixed amounts ([fixedSince], "YYYY-MM") started if that's earlier.
+     */
+    fun recentHistory(transactions: List<TransactionWithDetails>, now: Long, startedAt: Long?, fixedSince: String?): List<TransactionWithDetails> {
+        val from = minOf(
+            FinanceAnalysis.monthStart(now, -HISTORY_MONTHS),
+            startedAt?.let { FinanceAnalysis.monthStart(it) } ?: Long.MAX_VALUE,
+            fixedSince?.let { monthStartOf(it) } ?: Long.MAX_VALUE
+        )
+        return transactions.filter { it.date >= from }
+    }
+
     private fun monthStartOf(month: String): Long? {
         val (y, m) = month.split('-').mapNotNull { it.toIntOrNull() }.takeIf { it.size == 2 } ?: return null
         return Calendar.getInstance(TimeZone.getTimeZone("UTC")).run { clear(); set(y, m - 1, 1); timeInMillis }
@@ -465,7 +483,8 @@ object SharedBills {
 
         // 1a + 1b: your ticked card bills, minus any now paid from the bills account.
         val recentOnBudget = outflows.filter { it.date >= now - 120 * DAY }.map { FinanceAnalysis.merchantOf(it.note) }.toSet()
-        val ticked = tickedBills(candidates(input.transactions, input.billsAccountId, input.fixedMerchants + input.sharedMerchants, now, input.fixedCategoryIds), input.sharedMerchants)
+        val allCandidates = candidates(input.transactions, input.billsAccountId, input.fixedMerchants + input.sharedMerchants, now, input.fixedCategoryIds)
+        val ticked = tickedBills(allCandidates, input.sharedMerchants)
         val (moved, myBillsKept) = ticked.partition { c -> recentOnBudget.any { sameMerchant(it, c.merchant) } }
         val myBills = myBillsKept.map { SharedLine(label(it.merchant), it.monthly, viaOf(it.merchant)) }
         val myBillMerchants = myBillsKept.map { it.merchant }.toSet()
@@ -563,6 +582,7 @@ object SharedBills {
             myOwnPaidThisMonth = myBillsKept.filter { bill ->
                 myCard.any { it.date >= monthStart && FinanceAnalysis.merchantOf(it.name).let { m -> m == bill.merchant || sameMerchant(m, bill.merchant) } }
             }.map { label(it.merchant) }.toSet(),
+            candidates = allCandidates,
             partnerOwnPaidThisMonth = partnerBills.filter { bill ->
                 input.partner?.cardPayments.orEmpty().any { it.date >= monthStart && sameMerchant(bill.name.lowercase(), FinanceAnalysis.merchantOf(it.name)) }
             }.map { it.name }.toSet(),
