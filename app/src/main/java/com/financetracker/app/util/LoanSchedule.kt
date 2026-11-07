@@ -64,7 +64,7 @@ object LoanSchedule {
         rows.forEachIndexed { i, row ->
             if (parse(row.date) == null) issues += Issue(i, row.date, "The date couldn't be read.")
             if (abs(row.interestAndFee + row.principal - row.payment) > TOLERANCE) {
-                issues += Issue(i, row.date, "Interest & fee plus repayment doesn't equal the payment.")
+                issues += Issue(i, row.date, "Interest & fee plus principal doesn't equal the payment.")
             }
             val before = if (i == 0) loan.originalAmount else rows[i - 1].debtAfter
             if (before != null && abs(before - row.principal - row.debtAfter) > TOLERANCE) {
@@ -104,7 +104,7 @@ object LoanSchedule {
         paymentsPerYear = loan.paymentsPerYear ?: read.paymentsPerYear,
         payoutDate = loan.payoutDate.ifBlank { read.payoutDate },
         // The table's first date is the real one.
-        firstPaymentDate = read.schedule.firstOrNull()?.date ?: loan.firstPaymentDate.ifBlank { read.firstPaymentDate },
+        firstPaymentDate = payments(read).firstOrNull()?.date?.let(::isoDate) ?: loan.firstPaymentDate.ifBlank { read.firstPaymentDate },
         endDate = loan.endDate.ifBlank { read.endDate },
         nextRateReset = read.nextRateReset.ifBlank { loan.nextRateReset },
         earlyRepayment = read.earlyRepayment.ifBlank { loan.earlyRepayment }
@@ -120,7 +120,10 @@ object LoanSchedule {
     fun payments(loan: Loan): List<Payment> = loan.schedule.mapIndexedNotNull { i, row -> payment(loan, i, row) }
 
     private fun payment(loan: Loan, index: Int, row: LoanPayment): Payment? {
-        val date = parse(row.date) ?: return null
+        // The table gives the due date (e.g. the 11th); Betalingsservice takes the money on the
+        // last day of that month, weekends included (checked against the owner's bank), so
+        // that's the one date the app uses everywhere.
+        val date = parse(row.date)?.let(::endOfMonth) ?: return null
         val interestPct = loan.interestRatePct?.takeIf { it > 0 }
         val feePct = loan.contributionRatePct?.takeIf { it >= 0 }
         val ratePct = if (interestPct != null && feePct != null) interestPct + feePct else null
@@ -195,11 +198,11 @@ object LoanSchedule {
             append("${loan.schedule.size} payments ${loan.schedule.first().date} to ${loan.schedule.last().date}, ${paidCount(loan, now)} paid. ")
             debtNow(loan, now)?.let { append("Debt now ${r(it)}. ") }
             next?.let {
-                append("Next ${loan.schedule[it.index].date}: table ${r(it.bankPayment)} (interest ${it.interest?.let(::r) ?: "?"}, fee ${it.fee?.let(::r) ?: "?"}, repayment ${r(it.principal)})")
+                append("Next ${isoDate(it.date)} (taken on the last day of the month): table ${r(it.bankPayment)} (interest ${it.interest?.let(::r) ?: "?"}, fee ${it.fee?.let(::r) ?: "?"}, principal ${r(it.principal)})")
                 if (it.discount > 0) append(", discount ${r(it.discount)}, paid ${r(it.youPay)}")
                 append(", after tax ${r(it.afterTax)}. ")
             }
-            year?.let { append("${it.year}: interest & fee ${r(it.interestAndFee)}, repayment ${r(it.principal)}. ") }
+            year?.let { append("${it.year}: interest & fee ${r(it.interestAndFee)}, principal ${r(it.principal)}. ") }
             if (loan.rateResets.isNotEmpty()) append("Rows after the first rate reset are the lender's estimates.")
         }.trim()
     }
@@ -207,4 +210,14 @@ object LoanSchedule {
     fun parse(raw: String): Long? = AttentionChecks.parseDate(raw)
 
     private fun startOfDay(time: Long): Long = time - Math.floorMod(time, DAY)
+
+    /** The last day of [time]'s month, at UTC midnight like transaction dates. */
+    fun endOfMonth(time: Long): Long = Calendar.getInstance(UTC).run {
+        timeInMillis = time
+        set(Calendar.DAY_OF_MONTH, getActualMaximum(Calendar.DAY_OF_MONTH))
+        startOfDay(timeInMillis)
+    }
+
+    private fun isoDate(time: Long): String =
+        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply { timeZone = UTC }.format(time)
 }

@@ -109,6 +109,7 @@ private fun Line(label: String, value: String, color: Color = Color.Unspecified,
 }
 
 private val DATE_WIDTH = 92.dp
+private val YEAR_COL = 60.dp
 
 /** One scrolling column of the payment table, right-aligned. */
 @Composable
@@ -149,25 +150,52 @@ internal fun LoanScheduleDialog(loan: Loan, currency: String, onDismiss: () -> U
                     item {
                         Text("Each year: interest & fee vs principal", style = MaterialTheme.typography.titleSmall)
                         Text(
-                            "Grey: interest & fee (after any discount). Green: principal (afdrag), the amount on the right. Faded: the lender's estimates, after the first rate reset.",
+                            "Grey: interest & fee (after any discount). Green: principal (afdrag). Faded: the lender's estimates, after the first rate reset.",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(vertical = 6.dp)
                         )
+                        val small = MaterialTheme.typography.bodySmall
+                        val label = MaterialTheme.typography.labelSmall
+                        val faint = MaterialTheme.colorScheme.onSurfaceVariant
+                        Row(modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp)) {
+                            Text("Year", style = label, color = faint, modifier = Modifier.width(38.dp))
+                            Spacer(Modifier.weight(1f))
+                            Text("Interest & fee", style = label, color = faint, textAlign = TextAlign.End, modifier = Modifier.width(YEAR_COL))
+                            Text("Principal", style = label, color = primary, textAlign = TextAlign.End, modifier = Modifier.width(YEAR_COL))
+                            Text("Total", style = label, textAlign = TextAlign.End, modifier = Modifier.width(YEAR_COL + 4.dp))
+                        }
                         years.forEach { y ->
                             val alpha = if (y.estimates == y.payments) 0.45f else 1f
+                            val cost = y.interestAndFee - y.discount
                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                                Text("${y.year}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(40.dp))
-                                Row(modifier = Modifier.weight(1f).height(12.dp)) {
-                                    val cost = ((y.interestAndFee - y.discount) / max).toFloat()
-                                    val paid = (y.principal / max).toFloat()
-                                    if (cost > 0f) Box(Modifier.weight(cost).fillMaxHeight().background(muted.copy(alpha = alpha)))
-                                    if (paid > 0f) Box(Modifier.weight(paid).fillMaxHeight().background(primary.copy(alpha = alpha)))
-                                    val rest = 1f - cost - paid
+                                Text("${y.year}", style = small, modifier = Modifier.width(38.dp))
+                                Row(modifier = Modifier.weight(1f).height(12.dp).padding(end = 6.dp)) {
+                                    val c = (cost / max).toFloat()
+                                    val p = (y.principal / max).toFloat()
+                                    if (c > 0f) Box(Modifier.weight(c).fillMaxHeight().background(muted.copy(alpha = alpha)))
+                                    if (p > 0f) Box(Modifier.weight(p).fillMaxHeight().background(primary.copy(alpha = alpha)))
+                                    val rest = 1f - c - p
                                     if (rest > 0.001f) Spacer(Modifier.weight(rest))
                                 }
-                                Text(WHOLE.format(y.principal), style = MaterialTheme.typography.bodySmall, color = primary, textAlign = TextAlign.End, modifier = Modifier.width(64.dp))
+                                Text(WHOLE.format(cost), style = small, color = faint.copy(alpha = if (alpha < 1f) 0.7f else 1f), textAlign = TextAlign.End, modifier = Modifier.width(YEAR_COL))
+                                Text(WHOLE.format(y.principal), style = small, color = primary.copy(alpha = if (alpha < 1f) 0.7f else 1f), textAlign = TextAlign.End, modifier = Modifier.width(YEAR_COL))
+                                Text(WHOLE.format(cost + y.principal), style = small.copy(fontWeight = FontWeight.Medium), textAlign = TextAlign.End, modifier = Modifier.width(YEAR_COL + 4.dp))
                             }
                         }
+                        // The whole loan: the principal adds up to what was borrowed.
+                        val allCost = years.sumOf { it.interestAndFee - it.discount }
+                        val allPrincipal = years.sumOf { it.principal }
+                        HorizontalDivider(modifier = Modifier.padding(top = 6.dp))
+                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                            Text("All years", style = small.copy(fontWeight = FontWeight.Bold), modifier = Modifier.weight(1f))
+                            Text(WHOLE.format(allCost), style = small.copy(fontWeight = FontWeight.Bold), color = faint, textAlign = TextAlign.End, modifier = Modifier.width(YEAR_COL))
+                            Text(WHOLE.format(allPrincipal), style = small.copy(fontWeight = FontWeight.Bold), color = primary, textAlign = TextAlign.End, modifier = Modifier.width(YEAR_COL))
+                            Text(WHOLE.format(allCost + allPrincipal), style = small.copy(fontWeight = FontWeight.Bold), textAlign = TextAlign.End, modifier = Modifier.width(YEAR_COL + 4.dp))
+                        }
+                        Text(
+                            "Total = what you pay that year: interest & fee + principal" + (if (hasDiscount) ", with $discountLabel taken off." else "."),
+                            style = small, color = faint
+                        )
                         Spacer(Modifier.height(16.dp))
                         Text(
                             "Swipe the table sideways; the date stays put. " +
