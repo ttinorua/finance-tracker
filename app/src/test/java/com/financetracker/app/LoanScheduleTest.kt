@@ -88,20 +88,20 @@ class LoanScheduleTest {
     @Test
     fun `the discount stops after its guaranteed date`() {
         val payments = LoanSchedule.payments(loan)
-        assertTrue(payments.single { it.date == utc(2029, 12, 11) }.discount > 0)
-        assertEquals(0.0, payments.single { it.date == utc(2030, 3, 11) }.discount, 0.0)
+        assertTrue(payments.single { it.date == utc(2029, 12, 31) }.discount > 0)
+        assertEquals(0.0, payments.single { it.date == utc(2030, 3, 31) }.discount, 0.0)
     }
 
     @Test
     fun `rows after the first rate reset are estimates`() {
         val payments = LoanSchedule.payments(loan)
-        assertFalse(payments.single { it.date == utc(2031, 6, 11) }.estimate)
-        assertTrue(payments.single { it.date == utc(2031, 9, 11) }.estimate)
+        assertFalse(payments.single { it.date == utc(2031, 6, 30) }.estimate)
+        assertTrue(payments.single { it.date == utc(2031, 9, 30) }.estimate)
     }
 
     @Test
     fun `next payment, payments made and debt follow today's date`() {
-        assertEquals(utc(2026, 12, 11), LoanSchedule.nextPayment(loan, utc(2026, 11, 2))!!.date)
+        assertEquals(utc(2026, 12, 31), LoanSchedule.nextPayment(loan, utc(2026, 11, 2))!!.date)
         assertEquals(0, LoanSchedule.paidCount(loan, utc(2026, 11, 2)))
         assertEquals(1, LoanSchedule.paidCount(loan, utc(2027, 1, 1)))
         assertEquals(3656212.61, LoanSchedule.debtNow(loan, utc(2027, 1, 1))!!, 0.0)
@@ -148,7 +148,7 @@ class LoanScheduleTest {
         assertEquals(7L, merged.paidFromAccountId)
         assertTrue(merged.sharedWithHousehold)
         assertEquals(rows, merged.schedule)
-        assertEquals("2026-12-11", merged.firstPaymentDate)
+        assertEquals("2026-12-31", merged.firstPaymentDate)
         assertEquals(0.25, merged.discountPct!!, 0.0)
     }
 
@@ -158,7 +158,7 @@ class LoanScheduleTest {
     fun `the mortgage plans with the table's dates and amounts`() {
         val now = utc(2026, 11, 2)
         val (due, amount) = Mortgage.nextPayment(loan, now)!!
-        assertEquals(utc(2026, 12, 11), due)
+        assertEquals(utc(2026, 12, 31), due)
         assertEquals(LoanSchedule.payments(loan)[0].youPay, amount, 0.001)
         // Per month: the next full quarter (not the short first one), after the discount.
         assertEquals(LoanSchedule.payments(loan)[1].youPay / 3, Mortgage.plannedMonthly(loan, now)!!, 0.001)
@@ -175,6 +175,20 @@ class LoanScheduleTest {
         assertEquals((p[1].fee!! - p[1].discount) + (p[2].fee!! - p[2].discount), status.year.contribution, 0.01)
         // After tax with the document's 25.83%, not the default 33%.
         assertEquals((status.year.interest + status.year.contribution) * (1 - 0.2583), Mortgage.afterTax(status.year, loan), 0.01)
+    }
+
+    @Test
+    fun `payments are dated the last day of the month, weekends included, like the bank`() {
+        val sep2028 = loan.copy(schedule = listOf(LoanPayment("2028-09-11", 40295.59, 18296.00, 58591.59, 48183.23, 3531577.72)))
+        // 30 Sep 2028 is a Saturday; the owner's bank still shows the 30th.
+        assertEquals(utc(2028, 9, 30), LoanSchedule.payments(sep2028).single().date)
+    }
+
+    @Test
+    fun `the short first payment still counts as two months for the shared bills`() {
+        val withPayout = loan.copy(payoutDate = "2026-10-30")
+        assertEquals(2, Mortgage.monthsCovered(withPayout, utc(2026, 12, 31)))
+        assertEquals(3, Mortgage.monthsCovered(withPayout, utc(2027, 3, 31)))
     }
 
     @Test

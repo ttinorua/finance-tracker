@@ -94,7 +94,7 @@ object Mortgage {
     /** Months the payment on [due] covers: the first one only the months since the payout, the rest a full period. */
     fun monthsCovered(loan: Loan, due: Long): Int {
         val period = periodMonths(loan)
-        val first = AttentionChecks.parseDate(loan.firstPaymentDate) ?: return period
+        val first = LoanSchedule.payments(loan).firstOrNull()?.date ?: AttentionChecks.parseDate(loan.firstPaymentDate) ?: return period
         val payout = AttentionChecks.parseDate(loan.payoutDate) ?: return period
         if (Math.abs(due - first) > DAY) return period
         return monthsBetween(payout, first).coerceIn(1, period)
