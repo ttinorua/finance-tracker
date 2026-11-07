@@ -7,6 +7,7 @@ import com.financetracker.app.util.CardPayment
 import com.financetracker.app.util.Contributor
 import com.financetracker.app.util.PartnerBill
 import com.financetracker.app.util.PartnerReport
+import com.financetracker.app.util.FixedTransfers
 import com.financetracker.app.util.SharedBills
 import com.financetracker.app.util.SharedBillsInput
 import com.financetracker.app.util.SharedLine
@@ -84,7 +85,65 @@ class SharedBillsTest {
         assertEquals(8650.0 + 129.0 + 179.0, s.monthlyBills, 0.01)
         assertEquals(129.0, s.myCardThisMonth, 0.01)
         assertEquals(179.0, s.partnerCardThisMonth, 0.01)
-        assertEquals(s.myTarget - 129.0, s.myToTransfer, 0.01)
+        // What to transfer: the share minus the shared bills you pay yourself, rounded up to 100.
+        assertEquals(FixedTransfers.ceil100(s.myTarget - 129.0), s.myToTransfer, 0.01)
+    }
+
+    @Test
+    fun `own-account bills paid this month are counted for each person`() {
+        val spotify = PartnerReport(
+            netIncome = 30000.0, bills = listOf(SharedLine("Spotify", 179.0), SharedLine("Mofibo", 159.0)),
+            cardPayments = listOf(CardPayment("Spotify", 179.0, utc(2026, 10, 5))), transfersOut = emptyList()
+        )
+        val s = SharedBills.status(input(newAccount() + netflix(), {
+            it.copy(sharedMerchants = setOf(FinanceAnalysis.merchantOf("Netflix")), partner = spotify)
+        }))
+        assertEquals(setOf("Netflix"), s.myOwnPaidThisMonth)
+        assertEquals(setOf("Spotify"), s.partnerOwnPaidThisMonth)
+    }
+
+    @Test
+    fun `a ticked bill keeps its tick when it moves to another bank under another name`() {
+        val sydbank = 1L
+        val sjfPrivate = 2L
+        // Netflix from Sydbank ("MCD Netflix.com") until September, then from SJF Private ("Netflix.com").
+        val old = (5..9).map { tx(sydbank, 189.0, TransactionType.EXPENSE, utc(2026, it, 6), "MCD Netflix.com", "Media", "Streaming") }
+        val new = (9..10).map { tx(sjfPrivate, 189.0, TransactionType.EXPENSE, utc(2026, it, 20), "Netflix.com", "Media", "Streaming") }
+        val ticked = setOf(FinanceAnalysis.merchantOf("MCD Netflix.com"))
+        val s = SharedBills.status(input(newAccount() + old + new, { it.copy(sharedMerchants = ticked) }))
+        // Counted once, from the newest payments, and this month's payment from the new bank counts as paid.
+        assertEquals(1, s.myBills.size)
+        assertEquals(189.0, s.myOwnBills, 1.0)
+        assertEquals(189.0, s.myCardThisMonth, 0.01)
+        assertTrue(SharedBills.isTicked(FinanceAnalysis.merchantOf("Netflix.com"), ticked))
+        // Not every merchant matches: OK El is not OK A.m.b.a.
+        assertTrue(!SharedBills.isTicked(FinanceAnalysis.merchantOf("BS OK A.m.b.a."), setOf(FinanceAnalysis.merchantOf("BS OK El"))))
+    }
+
+    @Test
+    fun `a partner bill the bills account pays is counted there only`() {
+        // Kjestine's phone also sees the bills account, so it reports Balder as her own bill.
+        val txs = newAccount() + tx(bills, 1159.0, TransactionType.EXPENSE, utc(2026, 10, 2), "BS Balder Green Hills ApS")
+        val report = PartnerReport(
+            netIncome = 30000.0,
+            bills = listOf(SharedLine("Bs Balder Green Hills Aps", 1159.0), SharedLine("Mcdk Mofibo", 159.0)),
+            cardPayments = listOf(CardPayment("BS Balder Green Hills ApS", 1159.0, utc(2026, 10, 2)), CardPayment("MCDK Mofibo", 159.0, utc(2026, 10, 5))),
+            transfersOut = emptyList()
+        )
+        val s = SharedBills.status(input(txs, { it.copy(partner = report) }))
+        assertEquals(listOf("Mcdk Mofibo"), s.partnerBills.map { it.name })
+        assertEquals(listOf("Bs Balder Green Hills Aps"), s.partnerMovedToBudget)
+        assertEquals(8650.0 + 1159.0 + 159.0, s.monthlyBills, 0.01)
+        assertEquals(159.0, s.partnerCardThisMonth, 0.01)
+    }
+
+    @Test
+    fun `with fixed amounts, what each sent since they started is counted`() {
+        val txs = newAccount() + tx(bills, 4000.0, TransactionType.INCOME, utc(2026, 10, 3), "Kjestine Grand")
+        val s = SharedBills.status(input(txs, { it.copy(fixed = 4500.0 to 4300.0, fixedSince = "2026-10") }))
+        assertEquals(4500.0, s.myToTransfer, 0.0)
+        assertEquals(1, s.fixedMonths)
+        assertEquals(4000.0, s.partnerSentSinceFixed, 0.01)
     }
 
     @Test
@@ -224,5 +283,29 @@ class SharedBillsTest {
         assertEquals(1, upcoming.count { it.amount == 60_000.0 && it.everyMonths == 3 })
         // Saving for it: two months to go at the end of October, so 1 of 3 months set aside.
         assertEquals(1 to 20_000.0, com.financetracker.app.util.BillsAhead.setAside(loan, now))
+    }
+
+    private fun spotify(date: Long, categoryId: Long = 7L) =
+        TransactionWithDetails(nextId++, 199.0, TransactionType.EXPENSE, mine, "SJF Private", categoryId, "Streaming", "Media", "#000000", date, "Spotify")
+
+    @Test
+    fun `a bill in a fixed category shows from its first payment, marked new`() {
+        val c = SharedBills.candidates(listOf(spotify(utc(2026, 10, 5))), bills, emptySet(), now, setOf(7L))
+        val s = c.single { it.merchant.contains("spotify") }
+        assertEquals(199.0, s.monthly, 0.0)
+        assertTrue(s.label.endsWith("· new"))
+    }
+
+    @Test
+    fun `not when the category isn't fixed or the payment is old`() {
+        assertTrue(SharedBills.candidates(listOf(spotify(utc(2026, 10, 5))), bills, emptySet(), now, emptySet()).none { it.merchant.contains("spotify") })
+        assertTrue(SharedBills.candidates(listOf(spotify(utc(2026, 8, 1))), bills, emptySet(), now, setOf(7L)).none { it.merchant.contains("spotify") })
+    }
+
+    @Test
+    fun `three or more payments are left to the regular detection`() {
+        val txs = (8..10).map { spotify(utc(2026, it, 5)) }
+        assertTrue(FinanceAnalysis.newFixedBills(txs, setOf(7L), emptySet(), now).isEmpty())
+        assertEquals(1, FinanceAnalysis.newFixedBills(txs.takeLast(2), setOf(7L), emptySet(), now).size)
     }
 }
