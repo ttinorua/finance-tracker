@@ -238,7 +238,8 @@ class MainActivity : ComponentActivity() {
                         composable("household") {
                             val categories by repository.observeCategories().collectAsState(initial = emptyList())
                             HouseholdScreen(
-                                mainCategories = categories.filter { it.type == TransactionType.EXPENSE }.map { it.mainCategory }.distinct(),
+                                categories = categories.filter { it.type == TransactionType.EXPENSE }
+                                    .groupBy({ it.mainCategory }, { it.name }).mapValues { (_, subs) -> subs.distinct() },
                                 onBack = { navController.popBackStack() },
                                 onOpenSettings = { navController.navigate("household_settings") },
                                 onOpenTransactions = { main -> navController.navigate("household_tx/${Uri.encode(main ?: "*")}") }
