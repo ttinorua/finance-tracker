@@ -92,7 +92,8 @@ fun BillsAheadPage(accounts: List<Account>) {
         val input = SharedBillsInput(
             setup.accountId!!, transactions, balance, SharedBills.averageNetSalary(transactions, now), setup.partnerNetIncome,
             setup.partnerName, setup.answers, setup.sharedMerchants, fixedMerchants, setup.partnerBills, setup.lockedMySharePct,
-            setup.startedAt, setup.history, household.partnerSharedBills?.side, now, Mortgage.plannedBills(loans, setup.accountId, now)
+            setup.startedAt, setup.history, household.partnerSharedBills?.side, now, Mortgage.plannedBills(loans, setup.accountId, now),
+            setup.fixed?.plan?.let { it.mine to it.partner }
         )
         SharedBills.aheadView(input, account?.name ?: "Bills account", includeTicked)
     }

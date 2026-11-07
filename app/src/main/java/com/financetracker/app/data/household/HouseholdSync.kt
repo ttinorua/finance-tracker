@@ -531,14 +531,16 @@ object HouseholdSync {
                     account.id, transactions, repository.getAccountBalance(account), side.netIncome, setup.partnerNetIncome,
                     setup.partnerName, setup.answers, setup.sharedMerchants, FixedMerchants.merchants.value, setup.partnerBills,
                     setup.lockedMySharePct, setup.startedAt, setup.history, partner, now,
-                    Mortgage.plannedBills(LoansAndGoals.loans.value, account.id, now)
+                    Mortgage.plannedBills(LoansAndGoals.loans.value, account.id, now),
+                    setup.fixed?.plan?.let { it.mine to it.partner }
                 )
             )
             val aheadInput = SharedBillsInput(
                 account.id, transactions, repository.getAccountBalance(account), side.netIncome, setup.partnerNetIncome,
                 setup.partnerName, setup.answers, setup.sharedMerchants, FixedMerchants.merchants.value, setup.partnerBills,
                 setup.lockedMySharePct, setup.startedAt, setup.history, partner, now,
-                Mortgage.plannedBills(LoansAndGoals.loans.value, account.id, now)
+                Mortgage.plannedBills(LoansAndGoals.loans.value, account.id, now),
+                setup.fixed?.plan?.let { it.mine to it.partner }
             )
             json.put("status", JSONObject()
                 .put("account", account.name).put("month", monthKey(now)).put("share", status.myShare).put("bills", status.monthlyBills)
@@ -547,6 +549,7 @@ object HouseholdSync {
                 .put("bal", status.myBalance).put("obal", status.partnerBalance)
                 .put("inc", status.myIncome).put("oinc", status.partnerIncome)
                 .put("card", status.myCardThisMonth).put("ocard", status.partnerCardThisMonth)
+                .put("fixedSince", setup.fixed?.since ?: "")
                 .put("payees", sharedLines(status.budgetPayees)).put("mine", sharedLines(status.myBills)).put("theirs", sharedLines(status.partnerBills))
                 .put("ahead", aheadToJson(SharedBills.aheadView(aheadInput, account.name, includeTicked = true))))
         }
@@ -576,7 +579,8 @@ object HouseholdSync {
                 publisherCard = o.optDouble("card", 0.0), otherCard = o.optDouble("ocard", 0.0),
                 payees = readLines(o.optJSONArray("payees")), publisherBills = readLines(o.optJSONArray("mine")),
                 otherBills = readLines(o.optJSONArray("theirs")),
-                ahead = o.optJSONObject("ahead")?.let { runCatching { aheadFromJson(it) }.getOrNull() }
+                ahead = o.optJSONObject("ahead")?.let { runCatching { aheadFromJson(it) }.getOrNull() },
+                fixedSince = o.optString("fixedSince")
             )
         }
         return SharedBillsMemberReport(uid, side, snapshot, updatedAt)

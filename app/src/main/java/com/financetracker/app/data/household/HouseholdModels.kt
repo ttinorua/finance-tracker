@@ -117,7 +117,9 @@ data class SharedBillsSnapshot(
     val publisherBills: List<com.financetracker.app.util.SharedLine> = emptyList(),
     val otherBills: List<com.financetracker.app.util.SharedLine> = emptyList(),
     /** Bills ahead as the publishing phone sees it (its owner's side). */
-    val ahead: com.financetracker.app.util.AheadView? = null
+    val ahead: com.financetracker.app.util.AheadView? = null,
+    /** The month the transfers were fixed ("yyyy-MM"), or "" when they follow each month. */
+    val fixedSince: String = ""
 )
 
 /** One phone's shared-bills report: its own side (income, shared card bills, transfers out) and,
