@@ -153,7 +153,10 @@ data class SharedBillsStatus(
     /** Since the fixed transfers started: what each sent, and over how many months. */
     val mySentSinceFixed: Double = 0.0,
     val partnerSentSinceFixed: Double = 0.0,
-    val fixedMonths: Int = 0
+    val fixedMonths: Int = 0,
+    /** Which of each person's own-account shared bills have been paid this month (by name). */
+    val myOwnPaidThisMonth: Set<String> = emptySet(),
+    val partnerOwnPaidThisMonth: Set<String> = emptySet()
 ) {
     val partnerShare: Double get() = 1 - myShare
     val hasTarget: Boolean get() = monthlyBills > 0
@@ -524,6 +527,12 @@ object SharedBills {
             fixed = input.fixed,
             missingThisMonth = missingThisMonth(recurringOnAccount, now),
             partnerMovedToBudget = partnerMoved.map { it.name },
+            myOwnPaidThisMonth = myBillsKept.filter { bill ->
+                myCard.any { it.date >= monthStart && FinanceAnalysis.merchantOf(it.name) == bill.merchant }
+            }.map { label(it.merchant) }.toSet(),
+            partnerOwnPaidThisMonth = partnerBills.filter { bill ->
+                input.partner?.cardPayments.orEmpty().any { it.date >= monthStart && sameMerchant(bill.name.lowercase(), FinanceAnalysis.merchantOf(it.name)) }
+            }.map { it.name }.toSet(),
             mySentSinceFixed = fixedStart?.let { depositsIn(Contributor.ME, it, nextMonth) } ?: 0.0,
             partnerSentSinceFixed = fixedStart?.let { depositsIn(Contributor.PARTNER, it, nextMonth) } ?: 0.0,
             fixedMonths = fixedStart?.let { start -> generateSequence(start) { FinanceAnalysis.monthStart(it, 1) }.takeWhile { it < nextMonth }.count() } ?: 0

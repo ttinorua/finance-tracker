@@ -90,6 +90,19 @@ class SharedBillsTest {
     }
 
     @Test
+    fun `own-account bills paid this month are counted for each person`() {
+        val spotify = PartnerReport(
+            netIncome = 30000.0, bills = listOf(SharedLine("Spotify", 179.0), SharedLine("Mofibo", 159.0)),
+            cardPayments = listOf(CardPayment("Spotify", 179.0, utc(2026, 10, 5))), transfersOut = emptyList()
+        )
+        val s = SharedBills.status(input(newAccount() + netflix(), {
+            it.copy(sharedMerchants = setOf(FinanceAnalysis.merchantOf("Netflix")), partner = spotify)
+        }))
+        assertEquals(setOf("Netflix"), s.myOwnPaidThisMonth)
+        assertEquals(setOf("Spotify"), s.partnerOwnPaidThisMonth)
+    }
+
+    @Test
     fun `a partner bill the bills account pays is counted there only`() {
         // Kjestine's phone also sees the bills account, so it reports Balder as her own bill.
         val txs = newAccount() + tx(bills, 1159.0, TransactionType.EXPENSE, utc(2026, 10, 2), "BS Balder Green Hills ApS")
