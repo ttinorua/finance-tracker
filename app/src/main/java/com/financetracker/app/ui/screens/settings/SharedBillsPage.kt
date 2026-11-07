@@ -98,7 +98,8 @@ fun SharedBillsPage(accounts: List<Account>) {
     val fixedMerchants by FixedMerchants.merchants.collectAsState()
     val currency by CurrencySettings.currencyCode.collectAsState()
     val now = remember { System.currentTimeMillis() }
-    fun money(v: Double) = Formatters.currency(v, currency)
+    // Whole kroner here: these are amounts to transfer, øre only add noise.
+    fun money(v: Double) = Formatters.whole(v) + " " + Formatters.currencySymbol(currency)
     val partnerReport = household.partnerSharedBills
 
     if (editing || !setup.isSetUp) {
@@ -130,7 +131,7 @@ fun SharedBillsPage(accounts: List<Account>) {
                 setup.accountId!!, transactions, balance, myIncome, setup.partnerNetIncome, setup.partnerName, setup.answers,
                 setup.sharedMerchants, fixedMerchants, setup.partnerBills, setup.lockedMySharePct, setup.startedAt, setup.history,
                 partnerReport?.side, now, Mortgage.plannedBills(loans, setup.accountId, now),
-                setup.fixed?.plan?.let { it.mine to it.partner }
+                setup.fixed?.plan?.let { it.mine to it.partner }, setup.fixed?.since
             )
         )
     }
@@ -149,7 +150,8 @@ fun SharedBillsPage(accounts: List<Account>) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(account?.name ?: "Bills account", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "Split by net income" + (if (status.shareLocked) " · locked" else "") + " · balance ${money(balance)}",
+                    "Split by net income ${(status.myShare * 100).roundToInt()}% / ${(status.partnerShare * 100).roundToInt()}%" +
+                        (if (status.shareLocked) " · locked" else "") + " · balance ${money(balance)}",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -163,8 +165,8 @@ fun SharedBillsPage(accounts: List<Account>) {
             style = MaterialTheme.typography.titleSmall
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            OwnerTile("You", status.myShare, status.hasTarget, status.myTarget, status.myCardThisMonth, status.myToTransfer, status.myPaidInThisMonth, status.myShortThisMonth, status.myIncome, me, ::money, Modifier.weight(1f))
-            OwnerTile(partner, status.partnerShare, status.hasTarget, status.partnerTarget, status.partnerCardThisMonth, status.partnerToTransfer, status.partnerPaidInThisMonth, status.partnerShortThisMonth, status.partnerIncome, them, ::money, Modifier.weight(1f))
+            OwnerTile("You", status.myShare, status.hasTarget, status.myTarget, status.myOwnBills, status.myToTransfer, status.myPaidInThisMonth, status.myShortThisMonth, status.myIncome, me, ::money, Modifier.weight(1f))
+            OwnerTile(partner, status.partnerShare, status.hasTarget, status.partnerTarget, status.partnerOwnBills, status.partnerToTransfer, status.partnerPaidInThisMonth, status.partnerShortThisMonth, status.partnerIncome, them, ::money, Modifier.weight(1f))
         }
         Text(
             "Net income: yours is your salary, averaged over the months you were paid this past year" +
@@ -199,8 +201,20 @@ fun SharedBillsPage(accounts: List<Account>) {
             }
         }
 
-        // 1d: your own check.
-        if (status.hasTarget && status.monthsCounted > 0) {
+        // Since the fixed amounts started: what each of you sent against them.
+        if (setup.fixed != null && status.fixedMonths > 0) {
+            Section("Since the fixed amounts started · ${status.fixedMonths} month${if (status.fixedMonths == 1) "" else "s"}") {
+                fun sent(v: Double, fixed: Double): String {
+                    val due = fixed * status.fixedMonths
+                    return "${money(v)} of ${money(due)} sent" + if (v >= due) " ✓" else ""
+                }
+                Line("You", "", sent(status.mySentSinceFixed, setup.fixed!!.plan.mine))
+                Line(partner, "", sent(status.partnerSentSinceFixed, setup.fixed!!.plan.partner))
+            }
+        }
+
+        // 1d: your own check (before fixed amounts), once there's enough history to mean something.
+        if (setup.fixed == null && status.hasTarget && status.monthsCounted >= 3) {
             Section("Your check · since ${monthFormat.format(status.startMonth)}") {
                 val avg = status.myAveragePerMonth
                 Text(
@@ -249,10 +263,16 @@ fun SharedBillsPage(accounts: List<Account>) {
                 Text("Now paid from the bills account, so not counted twice: ${status.movedToBudget.joinToString()}.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Text("3 · Bills $partner pays by card", style = MaterialTheme.typography.titleSmall)
+            Text("3 · Bills $partner pays herself", style = MaterialTheme.typography.titleSmall)
             if (status.partnerConnected) {
                 status.partnerBills.forEach { Line(it.name, "from $partner's phone", money(it.monthly)) }
-                if (status.partnerBills.isEmpty()) Text("$partner hasn't ticked any yet.", style = MaterialTheme.typography.bodySmall)
+                if (status.partnerBills.isEmpty() && status.partnerMovedToBudget.isEmpty()) Text("$partner hasn't ticked any yet.", style = MaterialTheme.typography.bodySmall)
+                if (status.partnerMovedToBudget.isNotEmpty()) {
+                    Text(
+                        "Paid from ${account?.name ?: "the bills account"}, so counted there only: ${status.partnerMovedToBudget.joinToString()}.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 if (setup.partnerBills.isNotEmpty()) {
                     Text("$partner's phone now shares her bills, so the ones you typed aren't used.", style = MaterialTheme.typography.bodySmall)
                     TextButton(onClick = { SharedBillsSettings.clearPartnerBills() }) { Text("Remove the typed ones") }
@@ -276,7 +296,7 @@ fun SharedBillsPage(accounts: List<Account>) {
             Line("Total", "", money(status.monthlyBills), bold = true)
         }
 
-        MyBillsTicks(transactions, setup.accountId, setup.sharedMerchants, fixedMerchants, now, ::money)
+        MyBillsTicks(transactions, setup.accountId, setup.sharedMerchants, fixedMerchants, now, ::money, status.movedToBudget, account?.name)
 
         if (status.depositsThisMonth.isNotEmpty()) {
             Section("Money in this month") {
@@ -319,7 +339,9 @@ private fun MyBillsTicks(
     shared: Set<String>,
     fixedMerchants: Set<String>,
     now: Long,
-    money: (Double) -> String
+    money: (Double) -> String,
+    movedToBudget: List<String> = emptyList(),
+    accountName: String? = null
 ) {
     val candidates = remember(transactions, billsAccountId, fixedMerchants, shared) {
         SharedBills.candidates(transactions, billsAccountId ?: -1L, fixedMerchants + shared, now)
@@ -337,7 +359,11 @@ private fun MyBillsTicks(
                 Checkbox(checked = c.merchant in shared, onCheckedChange = null)
                 Column(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
                     Text(c.label, style = MaterialTheme.typography.bodyMedium)
-                    c.accountName?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    if (movedToBudget.any { it.equals(title(c.merchant), ignoreCase = true) }) {
+                        Text("Now paid from ${accountName ?: "the bills account"}", style = MaterialTheme.typography.bodySmall, color = LocalAppPalette.current.positive)
+                    } else {
+                        c.accountName?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    }
                 }
                 Text("${money(c.monthly)}/mo", style = MaterialTheme.typography.bodySmall)
             }
@@ -439,26 +465,16 @@ private fun FixedTransfersCards(
     fun myIncomeToKeep() = if (salaryNow > 0 && salaryNow < status.myIncome * (1 - FixedTransfers.INCOME_DROP)) salaryNow else status.myIncome
 
     if (agreed == null) {
+        // The tiles above already show these amounts; one button fixes them.
         val suggested = FixedTransfers.suggest(status)
-        GlassCard(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Fixed monthly transfers", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    "Transfer the same amount every month instead of following each month's bills. " +
-                        "The app only asks to change it when something big changes.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Line("You", "", money(suggested.mine), bold = true)
-                Line(partner, "", money(suggested.partner), bold = true)
-                Text(
-                    "Your share of all shared bills, minus the ones each of you pays from your own account, rounded up to 100 kr.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Button(onClick = { SharedBillsSettings.setFixed(suggested, thisMonth, myIncomeToKeep(), status.partnerIncome) }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Use these amounts")
-                }
-            }
+        Text(
+            "One amount each. Together ${money(suggested.total)} covers the ${money(status.budgetMonthly)} $accountName pays a month.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Button(onClick = { SharedBillsSettings.setFixed(suggested, thisMonth, myIncomeToKeep(), status.partnerIncome) }, modifier = Modifier.fillMaxWidth()) {
+            Text("Fix these amounts every month")
         }
+        HowWorkedOut(status, partner, accountName, money)
         return
     }
 
@@ -520,6 +536,34 @@ private fun FixedTransfersCards(
             TextButton(onClick = { SharedBillsSettings.clearFixed() }) { Text("Stop fixed amounts") }
         }
     }
+    HowWorkedOut(status, partner, accountName, money)
+}
+
+/** The sum behind each person's amount: all shared bills, the split, minus what each pays themselves. */
+@Composable
+private fun HowWorkedOut(status: SharedBillsStatus, partner: String, accountName: String, money: (Double) -> String) {
+    Section("How it's worked out") {
+        Line("Paid from $accountName", "", money(status.budgetMonthly))
+        Line("+ shared bills you pay yourself", "", money(status.myOwnBills))
+        Line("+ shared bills $partner pays herself", "", money(status.partnerOwnBills))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Line("All shared bills", "", money(status.monthlyBills), bold = true)
+        Row {
+            Text("", modifier = Modifier.weight(1f))
+            Text("You", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(80.dp), textAlign = TextAlign.End)
+            Text(partner, style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(80.dp), textAlign = TextAlign.End)
+        }
+        @Composable
+        fun Row3(label: String, a: String, b: String, bold: Boolean = false) = Row {
+            val w = if (bold) FontWeight.Bold else null
+            Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, fontWeight = w)
+            Text(a, modifier = Modifier.width(80.dp), textAlign = TextAlign.End, style = MaterialTheme.typography.bodyMedium, fontWeight = w)
+            Text(b, modifier = Modifier.width(80.dp), textAlign = TextAlign.End, style = MaterialTheme.typography.bodyMedium, fontWeight = w)
+        }
+        Row3("Share (${(status.myShare * 100).roundToInt()} / ${(status.partnerShare * 100).roundToInt()}%)", money(status.myTarget), money(status.partnerTarget))
+        Row3("− paid yourself", "−" + money(status.myOwnBills), "−" + money(status.partnerOwnBills))
+        Row3("Transfer (rounded up)", money(status.myToTransfer), money(status.partnerToTransfer), bold = true)
+    }
 }
 
 /** One owner's tile: what's left to transfer this month, their share, card bills and net income. */
@@ -546,8 +590,8 @@ private fun OwnerTile(
             Text(
                 when {
                     !hasTarget -> "No target yet"
-                    short <= 0 -> "On track · ${money(paidIn)} paid in"
-                    else -> "${money(short)} to go · ${money(paidIn)} paid in"
+                    short <= 0 -> "${money(paidIn)} of ${money(toTransfer)} sent ✓"
+                    else -> "${money(paidIn)} of ${money(toTransfer)} sent"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = when {
@@ -561,7 +605,7 @@ private fun OwnerTile(
                 Box(modifier = Modifier.fillMaxWidth(fraction).fillMaxHeight().background(color))
             }
             TileLine("Share", money(target))
-            if (card > 0) TileLine("Card bills", "−" + money(card))
+            if (card > 0) TileLine("Paid yourself", "−" + money(card))
             if (income > 0) TileLine("Net income", money(income))
         }
     }

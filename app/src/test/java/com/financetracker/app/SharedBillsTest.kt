@@ -7,6 +7,7 @@ import com.financetracker.app.util.CardPayment
 import com.financetracker.app.util.Contributor
 import com.financetracker.app.util.PartnerBill
 import com.financetracker.app.util.PartnerReport
+import com.financetracker.app.util.FixedTransfers
 import com.financetracker.app.util.SharedBills
 import com.financetracker.app.util.SharedBillsInput
 import com.financetracker.app.util.SharedLine
@@ -84,7 +85,34 @@ class SharedBillsTest {
         assertEquals(8650.0 + 129.0 + 179.0, s.monthlyBills, 0.01)
         assertEquals(129.0, s.myCardThisMonth, 0.01)
         assertEquals(179.0, s.partnerCardThisMonth, 0.01)
-        assertEquals(s.myTarget - 129.0, s.myToTransfer, 0.01)
+        // What to transfer: the share minus the shared bills you pay yourself, rounded up to 100.
+        assertEquals(FixedTransfers.ceil100(s.myTarget - 129.0), s.myToTransfer, 0.01)
+    }
+
+    @Test
+    fun `a partner bill the bills account pays is counted there only`() {
+        // Kjestine's phone also sees the bills account, so it reports Balder as her own bill.
+        val txs = newAccount() + tx(bills, 1159.0, TransactionType.EXPENSE, utc(2026, 10, 2), "BS Balder Green Hills ApS")
+        val report = PartnerReport(
+            netIncome = 30000.0,
+            bills = listOf(SharedLine("Bs Balder Green Hills Aps", 1159.0), SharedLine("Mcdk Mofibo", 159.0)),
+            cardPayments = listOf(CardPayment("BS Balder Green Hills ApS", 1159.0, utc(2026, 10, 2)), CardPayment("MCDK Mofibo", 159.0, utc(2026, 10, 5))),
+            transfersOut = emptyList()
+        )
+        val s = SharedBills.status(input(txs, { it.copy(partner = report) }))
+        assertEquals(listOf("Mcdk Mofibo"), s.partnerBills.map { it.name })
+        assertEquals(listOf("Bs Balder Green Hills Aps"), s.partnerMovedToBudget)
+        assertEquals(8650.0 + 1159.0 + 159.0, s.monthlyBills, 0.01)
+        assertEquals(159.0, s.partnerCardThisMonth, 0.01)
+    }
+
+    @Test
+    fun `with fixed amounts, what each sent since they started is counted`() {
+        val txs = newAccount() + tx(bills, 4000.0, TransactionType.INCOME, utc(2026, 10, 3), "Kjestine Grand")
+        val s = SharedBills.status(input(txs, { it.copy(fixed = 4500.0 to 4300.0, fixedSince = "2026-10") }))
+        assertEquals(4500.0, s.myToTransfer, 0.0)
+        assertEquals(1, s.fixedMonths)
+        assertEquals(4000.0, s.partnerSentSinceFixed, 0.01)
     }
 
     @Test
