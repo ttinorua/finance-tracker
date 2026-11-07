@@ -37,6 +37,7 @@ import com.financetracker.app.data.prefs.FixedExpenseCategories
 import com.financetracker.app.data.prefs.FixedMerchants
 import com.financetracker.app.data.prefs.SharedBillsSettings
 import com.financetracker.app.data.prefs.LoansAndGoals
+import com.financetracker.app.data.prefs.ClosedAccounts
 import com.financetracker.app.data.prefs.MainAccountSettings
 import com.financetracker.app.data.prefs.ThemeSettings
 import com.financetracker.app.data.repository.FinanceRepository
@@ -58,6 +59,7 @@ class FinanceApp : Application() {
         AiSettings.init(this)
         ThemeSettings.init(this)
         MainAccountSettings.init(this)
+        ClosedAccounts.init(this)
         ViewFilter.init(this)
         SavedChats.init(this)
         AssistantPrefs.init(this)

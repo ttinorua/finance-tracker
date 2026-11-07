@@ -42,7 +42,7 @@ object MainAccountSettings {
 
     /** Picks a main account ([pickMainAccount]) when none is set or the set one no longer exists. */
     suspend fun ensure(repository: FinanceRepository) {
-        val accounts = repository.getAccounts()
+        val accounts = repository.getAccounts().filterNot { ClosedAccounts.isClosed(it.id) }
         val current = _mainAccountId.value
         if (current != null && accounts.any { it.id == current }) return
         val picked = pickMainAccount(accounts.map { it.id }, repository.observeTransactions().first(), System.currentTimeMillis())
