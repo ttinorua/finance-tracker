@@ -39,6 +39,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.layout.size
 import com.financetracker.app.util.SharedCandidate
 import kotlinx.coroutines.Dispatchers
+import com.financetracker.app.data.prefs.FixedExpenseCategories
 import kotlinx.coroutines.withContext
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -138,17 +139,21 @@ fun SharedBillsPage(accounts: List<Account>) {
     // own thread. The last figures stay on screen while new ones are worked out.
     val computed by produceState<Pair<Double, SharedBillsStatus>?>(null, account, transactions, setup, partnerReport, fixedMerchants, loans) {
         val balance = account?.let { repository.getAccountBalance(it) } ?: 0.0
+        // Opened again with nothing changed (same day, same transactions and settings): reuse the last figures.
+        val key = listOf(setup, balance, partnerReport, fixedMerchants, loans, FixedExpenseCategories.fixedCategoryIds.value, now / DAY_MS, transactions)
+        StatusCache.lastFor(key)?.let { value = it; return@produceState }
         value = withContext(Dispatchers.Default) {
-            val myIncome = SharedBills.averageNetSalary(transactions, now)
+            val history = SharedBills.recentHistory(transactions, now, setup.startedAt, setup.fixed?.since)
+            val myIncome = SharedBills.averageNetSalary(history, now)
             balance to SharedBills.status(
                 SharedBillsInput(
-                    setup.accountId!!, transactions, balance, myIncome, setup.partnerNetIncome, setup.partnerName, setup.answers,
+                    setup.accountId!!, history, balance, myIncome, setup.partnerNetIncome, setup.partnerName, setup.answers,
                     setup.sharedMerchants, fixedMerchants, setup.partnerBills, setup.lockedMySharePct, setup.startedAt, setup.history,
                     partnerReport?.side, now, Mortgage.plannedBills(loans, setup.accountId, now),
                     setup.fixed?.plan?.let { it.mine to it.partner }, setup.fixed?.since
                 )
             )
-        }
+        }.also { StatusCache.remember(key, it) }
     }
     val (balance, status) = computed ?: run { Loading(); return }
     // 1l: keep this month's targets, so later changes don't rewrite it once it's over.
@@ -280,7 +285,7 @@ fun SharedBillsPage(accounts: List<Account>) {
             Line("Total", "", money(status.monthlyBills), bold = true)
         }
 
-        MyBillsTicks(transactions, setup.accountId, setup.sharedMerchants, fixedMerchants, now, ::money, status.movedToBudget, account?.name)
+        MyBillsTicks(transactions, setup.accountId, setup.sharedMerchants, fixedMerchants, now, ::money, status.movedToBudget, account?.name, status.candidates)
 
         if (status.depositsThisMonth.isNotEmpty()) {
             Section("Money in this month") {
@@ -314,6 +319,20 @@ fun SharedBillsPage(accounts: List<Account>) {
     }
 }
 
+private const val DAY_MS = 24L * 60 * 60 * 1000
+
+/**
+ * The last figures worked out, kept while the app runs, so opening the page again is instant.
+ * They're reused only when everything they were worked out from is the same, on the same day.
+ */
+private object StatusCache {
+    private var key: Any? = null
+    private var value: Pair<Double, SharedBillsStatus>? = null
+
+    @Synchronized fun lastFor(key: Any): Pair<Double, SharedBillsStatus>? = value?.takeIf { this.key == key }
+    @Synchronized fun remember(key: Any, value: Pair<Double, SharedBillsStatus>) { this.key = key; this.value = value }
+}
+
 /** While the transactions load and the figures are worked out. */
 @Composable
 private fun Loading() {
@@ -334,10 +353,15 @@ private fun MyBillsTicks(
     now: Long,
     money: (Double) -> String,
     movedToBudget: List<String> = emptyList(),
-    accountName: String? = null
+    accountName: String? = null,
+    /** Already worked out with the split; the partner's phone works them out here. */
+    known: List<SharedCandidate>? = null
 ) {
-    val found by produceState<List<SharedCandidate>?>(null, transactions, billsAccountId, fixedMerchants, shared) {
-        value = withContext(Dispatchers.Default) { SharedBills.candidates(transactions, billsAccountId ?: -1L, fixedMerchants + shared, now) }
+    val found by produceState(known, known, transactions, billsAccountId, fixedMerchants, shared) {
+        if (known != null) { value = known; return@produceState }
+        value = withContext(Dispatchers.Default) {
+            SharedBills.candidates(SharedBills.recentHistory(transactions, now, null, null), billsAccountId ?: -1L, fixedMerchants + shared, now)
+        }
     }
     Section("Your recurring bills · tick the shared ones") {
         if (found == null) Text("Finding your recurring bills…", style = MaterialTheme.typography.bodySmall)
