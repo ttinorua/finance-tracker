@@ -3,6 +3,7 @@ package com.financetracker.app.data.prefs
 import android.content.Context
 import com.financetracker.app.util.BillCadence
 import com.financetracker.app.util.Contributor
+import com.financetracker.app.util.FixedTransfers
 import com.financetracker.app.util.PartnerBill
 import org.json.JSONArray
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -30,7 +31,12 @@ data class SharedBillsSetup(
     /** Targets saved per month ("yyyy-MM" → mine to partner's), so later changes don't rewrite the past. */
     val history: Map<String, Pair<Double, Double>> = emptyMap(),
     /** Share your shared-bill figures with the partner through the Household. */
-    val shareWithHousehold: Boolean = true
+    val shareWithHousehold: Boolean = true,
+    /** The fixed monthly transfers you agreed on (yours, the partner's) and the incomes they were
+     * based on; null = the amounts follow each month ([com.financetracker.app.util.FixedTransfers]). */
+    val fixed: FixedTransfers.Agreed? = null,
+    /** The month "Keep current" was chosen, so the same month doesn't ask again. */
+    val keptMonth: String? = null
 ) {
     val isSetUp: Boolean get() = accountId != null
 }
@@ -80,6 +86,16 @@ object SharedBillsSettings {
 
     fun setShareWithHousehold(on: Boolean) = update(_setup.value.copy(shareWithHousehold = on))
 
+    /** Fixes the monthly transfers from [month] on. */
+    fun setFixed(plan: FixedTransfers.Plan, month: String, myIncome: Double, partnerIncome: Double) =
+        update(_setup.value.copy(fixed = FixedTransfers.Agreed(plan, month, myIncome, partnerIncome), keptMonth = null))
+
+    /** Back to amounts that follow each month. */
+    fun clearFixed() = update(_setup.value.copy(fixed = null, keptMonth = null))
+
+    /** "Keep current": no new suggestion for the rest of [month]. */
+    fun keepCurrent(month: String) = update(_setup.value.copy(keptMonth = month))
+
     /** Saves [month]'s targets while it's the current month; once the month ends they stay as they were. */
     fun recordMonth(month: String, myTarget: Double, partnerTarget: Double) {
         if (_setup.value.history[month] == (myTarget to partnerTarget)) return
@@ -99,7 +115,7 @@ object SharedBillsSettings {
         if (::prefs.isInitialized) prefs.edit().putString(KEY, encode(value)).apply()
     }
 
-    private fun encode(s: SharedBillsSetup): String = JSONObject()
+    internal fun encode(s: SharedBillsSetup): String = JSONObject()
         .put("accountId", s.accountId ?: -1L)
         .put("partnerName", s.partnerName)
         .put("partnerNetIncome", s.partnerNetIncome)
@@ -113,9 +129,16 @@ object SharedBillsSettings {
         .putOpt("partnerIncomeAt", s.partnerIncomeUpdatedAt)
         .put("history", JSONObject().apply { s.history.forEach { (k, v) -> put(k, JSONArray().put(v.first).put(v.second)) } })
         .put("shareWithHousehold", s.shareWithHousehold)
+        .apply {
+            s.fixed?.let { f ->
+                put("fixed", JSONObject().put("mine", f.plan.mine).put("partner", f.plan.partner).put("since", f.since)
+                    .put("myIncome", f.myIncome).put("partnerIncome", f.partnerIncome))
+            }
+            s.keptMonth?.let { put("keptMonth", it) }
+        }
         .toString()
 
-    private fun decode(raw: String?): SharedBillsSetup? {
+    internal fun decode(raw: String?): SharedBillsSetup? {
         val o = JSONObject(raw ?: return null)
         val answers = o.optJSONObject("answers")
         return SharedBillsSetup(
@@ -140,7 +163,16 @@ object SharedBillsSettings {
             history = o.optJSONObject("history")?.let { h ->
                 h.keys().asSequence().mapNotNull { k -> runCatching { h.getJSONArray(k).let { k to (it.getDouble(0) to it.getDouble(1)) } }.getOrNull() }.toMap()
             }.orEmpty(),
-            shareWithHousehold = o.optBoolean("shareWithHousehold", true)
+            shareWithHousehold = o.optBoolean("shareWithHousehold", true),
+            fixed = o.optJSONObject("fixed")?.let { f ->
+                runCatching {
+                    FixedTransfers.Agreed(
+                        FixedTransfers.Plan(f.getDouble("mine"), f.getDouble("partner")), f.getString("since"),
+                        f.optDouble("myIncome", 0.0), f.optDouble("partnerIncome", 0.0)
+                    )
+                }.getOrNull()
+            },
+            keptMonth = o.optString("keptMonth").takeIf { it.isNotBlank() }
         )
     }
 }

@@ -61,6 +61,11 @@ import com.financetracker.app.util.Formatters
 import com.financetracker.app.util.Mortgage
 import com.financetracker.app.util.PartnerBill
 import com.financetracker.app.util.SharedBills
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.layout.width
+import com.financetracker.app.data.db.entity.TransactionWithDetails
+import com.financetracker.app.data.prefs.SharedBillsSetup
+import com.financetracker.app.util.FixedTransfers
 import com.financetracker.app.util.SharedBillsInput
 import com.financetracker.app.util.SharedBillsStatus
 import java.text.SimpleDateFormat
@@ -124,7 +129,8 @@ fun SharedBillsPage(accounts: List<Account>) {
             SharedBillsInput(
                 setup.accountId!!, transactions, balance, myIncome, setup.partnerNetIncome, setup.partnerName, setup.answers,
                 setup.sharedMerchants, fixedMerchants, setup.partnerBills, setup.lockedMySharePct, setup.startedAt, setup.history,
-                partnerReport?.side, now, Mortgage.plannedBills(loans, setup.accountId, now)
+                partnerReport?.side, now, Mortgage.plannedBills(loans, setup.accountId, now),
+                setup.fixed?.plan?.let { it.mine to it.partner }
             )
         )
     }
@@ -165,6 +171,7 @@ fun SharedBillsPage(accounts: List<Account>) {
                 (if (status.partnerConnected) "; $partner's comes from $partner's phone." else "."),
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        if (status.hasTarget) FixedTransfersCards(setup, status, transactions, partner, account?.name ?: "the bills account", now, ::money)
         if (!status.hasTarget) {
             Text(
                 "No bills found yet. Tick your shared bills below, or wait for payments out of ${account?.name ?: "the bills account"}.",
@@ -373,7 +380,9 @@ private fun PartnerPhoneView(s: SharedBillsSnapshot, other: String, updatedAt: L
             Text("Split by net income · from $other's phone · updated ${Formatters.syncTimestamp(updatedAt)}", style = MaterialTheme.typography.bodySmall, color = LocalAppPalette.current.positive)
         }
         Text(
-            if (hasTarget) "${monthFormat.format(System.currentTimeMillis())}: transfer ${money(s.publisherToTransfer + s.otherToTransfer)} in total" else "No target yet",
+            if (hasTarget) "${monthFormat.format(System.currentTimeMillis())}: transfer ${money(s.publisherToTransfer + s.otherToTransfer)} in total" +
+                (sinceLabel(s.fixedSince)?.let { " · fixed since $it" } ?: "")
+            else "No target yet",
             style = MaterialTheme.typography.titleSmall
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -396,6 +405,120 @@ private fun PartnerPhoneView(s: SharedBillsSnapshot, other: String, updatedAt: L
             Line("Total", "", money(s.monthlyBills), bold = true)
         }
         Text("Set up on $other's phone. Tick your own shared bills below and they count for you on both phones.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** "2026-11" → "Nov 2026". */
+private fun sinceLabel(month: String?): String? {
+    val parts = month?.split('-')?.mapNotNull { it.toIntOrNull() }?.takeIf { it.size == 2 } ?: return null
+    val names = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+    return names.getOrNull(parts[1] - 1)?.let { "$it ${parts[0]}" }
+}
+
+/**
+ * Fixed monthly transfers: the same amount from each of you every month (option B: your share of
+ * all shared bills minus the ones you pay from your own account, rounded up to 100). Asks to
+ * change them only when, within the month, they're 500 kr off, a regular bill wasn't paid, or an
+ * income is lower than usual.
+ */
+@Composable
+private fun FixedTransfersCards(
+    setup: SharedBillsSetup,
+    status: SharedBillsStatus,
+    transactions: List<TransactionWithDetails>,
+    partner: String,
+    accountName: String,
+    now: Long,
+    money: (Double) -> String
+) {
+    val palette = LocalAppPalette.current
+    val thisMonth = SharedBills.monthKey(now)
+    val agreed = setup.fixed
+    val salaryNow = remember(transactions) { FixedTransfers.salaryThisMonth(transactions, now) }
+    // Incomes to remember with the amounts: this month's salary if it's a cut, else the usual one.
+    fun myIncomeToKeep() = if (salaryNow > 0 && salaryNow < status.myIncome * (1 - FixedTransfers.INCOME_DROP)) salaryNow else status.myIncome
+
+    if (agreed == null) {
+        val suggested = FixedTransfers.suggest(status)
+        GlassCard(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Fixed monthly transfers", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "Transfer the same amount every month instead of following each month's bills. " +
+                        "The app only asks to change it when something big changes.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Line("You", "", money(suggested.mine), bold = true)
+                Line(partner, "", money(suggested.partner), bold = true)
+                Text(
+                    "Your share of all shared bills, minus the ones each of you pays from your own account, rounded up to 100 kr.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Button(onClick = { SharedBillsSettings.setFixed(suggested, thisMonth, myIncomeToKeep(), status.partnerIncome) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Use these amounts")
+                }
+            }
+        }
+        return
+    }
+
+    val change = remember(agreed, status, salaryNow, setup.keptMonth) {
+        FixedTransfers.check(agreed, status, salaryNow, status.partnerIncome, partner, thisMonth, setup.keptMonth, money)
+    }
+    change?.let { c ->
+        GlassCard(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Time to change the transfers?", style = MaterialTheme.typography.titleSmall, color = palette.warning)
+                c.reasons.forEach { reason ->
+                    Row {
+                        Text("•", modifier = Modifier.padding(end = 8.dp), color = palette.warning)
+                        Text(reason, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                Row {
+                    Text("", modifier = Modifier.weight(1f))
+                    Text("Now", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(90.dp), textAlign = TextAlign.End)
+                    Text("Suggested", style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(90.dp), textAlign = TextAlign.End)
+                }
+                listOf("You" to (agreed.plan.mine to c.suggested.mine), partner to (agreed.plan.partner to c.suggested.partner)).forEach { (who, amounts) ->
+                    Row {
+                        Text(who, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                        Text(money(amounts.first), modifier = Modifier.width(90.dp), textAlign = TextAlign.End, style = MaterialTheme.typography.bodyMedium)
+                        Text(money(amounts.second), modifier = Modifier.width(90.dp), textAlign = TextAlign.End, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { SharedBillsSettings.setFixed(c.suggested, thisMonth, myIncomeToKeep(), status.partnerIncome) },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Use new amounts") }
+                    OutlinedButton(onClick = { SharedBillsSettings.keepCurrent(thisMonth) }, modifier = Modifier.weight(1f)) { Text("Keep current") }
+                }
+                Text("\"Keep current\" waits for next month. If it's still off then, you'll be asked again.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+
+    GlassCard(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Monthly transfers · fixed since ${sinceLabel(agreed.since) ?: agreed.since}", style = MaterialTheme.typography.titleSmall)
+            Line("You", "", money(agreed.plan.mine), bold = true)
+            Line(partner, "", money(agreed.plan.partner), bold = true)
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Line("Together into $accountName", "", money(agreed.plan.total))
+            Line("$accountName pays", "a month on average", money(status.budgetMonthly))
+            val short = status.budgetMonthly - agreed.plan.total
+            Text(
+                if (short <= 0) "✓ Covered" else "${money(short)} a month short",
+                style = MaterialTheme.typography.bodySmall, color = if (short <= 0) palette.positive else palette.warning
+            )
+            Text(
+                "The app asks to change the amounts when, within the month, the account needs ${money(FixedTransfers.THRESHOLD)} more or less, " +
+                    "a regular bill isn't paid, or a salary is lower than usual.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            TextButton(onClick = { SharedBillsSettings.clearFixed() }) { Text("Stop fixed amounts") }
+        }
     }
 }
 

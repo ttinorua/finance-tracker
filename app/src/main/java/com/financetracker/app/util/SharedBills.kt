@@ -106,7 +106,9 @@ data class SharedBillsInput(
     val now: Long,
     /** Loans paid from the bills account, counted as planned from day one (their real payments then
      * only show as paid, never counted twice). */
-    val planned: List<PlannedBill> = emptyList()
+    val planned: List<PlannedBill> = emptyList(),
+    /** Fixed monthly transfers (mine to partner's), once agreed ([FixedTransfers]); null = follow the month. */
+    val fixed: Pair<Double, Double>? = null
 )
 
 data class SharedBillsStatus(
@@ -139,15 +141,19 @@ data class SharedBillsStatus(
     val monthsCounted: Int,
     /** When you're paying more than your share: one of your card bills to hand over. */
     val handOver: SharedLine?,
-    val warnings: List<SharedBillWarning>
+    val warnings: List<SharedBillWarning>,
+    /** The agreed fixed transfers (mine, partner's), when set. */
+    val fixed: Pair<Double, Double>? = null,
+    /** Monthly bills from the bills account that are usually paid by now but haven't been this month. */
+    val missingThisMonth: List<SharedLine> = emptyList()
 ) {
     val partnerShare: Double get() = 1 - myShare
     val hasTarget: Boolean get() = monthlyBills > 0
     val budgetIsRough: Boolean get() = budgetHistoryMonths < 3
     val unknown: List<SharedDeposit> get() = depositsThisMonth.filter { it.from == null }
-    /** What to transfer this month: the target minus shared bills already paid by card. */
-    val myToTransfer: Double get() = (myTarget - myCardThisMonth).coerceAtLeast(0.0)
-    val partnerToTransfer: Double get() = (partnerTarget - partnerCardThisMonth).coerceAtLeast(0.0)
+    /** What to transfer this month: the agreed fixed amount, else the target minus shared bills already paid by card. */
+    val myToTransfer: Double get() = fixed?.first ?: (myTarget - myCardThisMonth).coerceAtLeast(0.0)
+    val partnerToTransfer: Double get() = fixed?.second ?: (partnerTarget - partnerCardThisMonth).coerceAtLeast(0.0)
     val myShortThisMonth: Double get() = (myToTransfer - myPaidInThisMonth).coerceAtLeast(0.0)
     val partnerShortThisMonth: Double get() = (partnerToTransfer - partnerPaidInThisMonth).coerceAtLeast(0.0)
     /** Your average over or under per month since the start (positive = paying more than your share). */
@@ -195,6 +201,20 @@ object SharedBills {
     }
 
     private fun roundTo10(v: Double): Double = (v / 10).roundToLong() * 10.0
+
+    /**
+     * Monthly bills paid from the bills account last month that should have come by now (5 days
+     * after last month's day) but haven't this month: ended, or just late. Each with its amount.
+     */
+    internal fun missingThisMonth(recurring: List<FinanceAnalysis.RecurringPayment>, now: Long): List<SharedLine> {
+        val monthStart = FinanceAnalysis.monthStart(now)
+        val lastMonthStart = FinanceAnalysis.monthStart(now, -1)
+        val today = ((now - monthStart) / DAY).toInt() + 1
+        return recurring
+            .filter { it.cadence == FinanceAnalysis.Cadence.MONTHLY && it.lastDate in lastMonthStart until monthStart }
+            .filter { today >= ((it.lastDate - lastMonthStart) / DAY).toInt() + 1 + 5 }
+            .map { SharedLine(label(it.merchant), it.lastAmount) }
+    }
 
     private fun words(name: String) = name.trim().lowercase().split(Regex("\\s+")).filter { it.length >= 3 }
 
@@ -477,7 +497,9 @@ object SharedBills {
             partnerBalance = partnerBalance,
             monthsCounted = months,
             handOver = handOver,
-            warnings = warnings(recurringOnAccount, input.balance, myTarget + partnerTarget, now)
+            warnings = warnings(recurringOnAccount, input.balance, myTarget + partnerTarget, now),
+            fixed = input.fixed,
+            missingThisMonth = missingThisMonth(recurringOnAccount, now)
         )
     }
 

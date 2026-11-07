@@ -190,7 +190,8 @@ object AttentionMonitor {
                     shared.partnerNetIncome, shared.partnerName, shared.answers, shared.sharedMerchants, FixedMerchants.merchants.value,
                     shared.partnerBills, shared.lockedMySharePct, shared.startedAt, shared.history,
                     HouseholdSync.state.value.partnerSharedBills?.side, now,
-                    Mortgage.plannedBills(LoansAndGoals.loans.value, account.id, now)
+                    Mortgage.plannedBills(LoansAndGoals.loans.value, account.id, now),
+                    shared.fixed?.plan?.let { it.mine to it.partner }
                 )
             ).also { if (it.hasTarget) SharedBillsSettings.recordMonth(SharedBills.monthKey(now), it.myTarget, it.partnerTarget) }
         }
