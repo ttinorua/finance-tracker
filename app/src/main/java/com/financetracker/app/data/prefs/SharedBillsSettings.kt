@@ -5,6 +5,7 @@ import com.financetracker.app.util.BillCadence
 import com.financetracker.app.util.Contributor
 import com.financetracker.app.util.FixedTransfers
 import com.financetracker.app.util.PartnerBill
+import com.financetracker.app.util.SharedBills
 import org.json.JSONArray
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -72,8 +73,15 @@ object SharedBillsSettings {
         )
     }
 
+    /** Ticks or unticks a bill. Unticking removes it under every name it was ticked as (a bill keeps
+     * its tick when it moves to another bank, so the old bank's name may be the one saved). */
     fun setShared(merchant: String, shared: Boolean) = update(
-        _setup.value.let { it.copy(sharedMerchants = if (shared) it.sharedMerchants + merchant else it.sharedMerchants - merchant) }
+        _setup.value.let { s ->
+            s.copy(
+                sharedMerchants = if (shared) s.sharedMerchants + merchant
+                else s.sharedMerchants.filterNot { it == merchant || SharedBills.sameMerchant(it, merchant) }.toSet()
+            )
+        }
     )
 
     fun savePartnerBill(bill: PartnerBill) = update(

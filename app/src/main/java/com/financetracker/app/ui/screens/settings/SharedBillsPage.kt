@@ -321,11 +321,11 @@ private fun MyBillsTicks(
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth().toggleable(
-                    value = c.merchant in shared, role = Role.Checkbox,
+                    value = SharedBills.isTicked(c.merchant, shared), role = Role.Checkbox,
                     onValueChange = { SharedBillsSettings.setShared(c.merchant, it) }
                 )
             ) {
-                Checkbox(checked = c.merchant in shared, onCheckedChange = null)
+                Checkbox(checked = SharedBills.isTicked(c.merchant, shared), onCheckedChange = null)
                 Column(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
                     Text(c.label, style = MaterialTheme.typography.bodyMedium)
                     if (movedToBudget.any { it.equals(title(c.merchant), ignoreCase = true) }) {

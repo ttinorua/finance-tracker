@@ -103,6 +103,24 @@ class SharedBillsTest {
     }
 
     @Test
+    fun `a ticked bill keeps its tick when it moves to another bank under another name`() {
+        val sydbank = 1L
+        val sjfPrivate = 2L
+        // Netflix from Sydbank ("MCD Netflix.com") until September, then from SJF Private ("Netflix.com").
+        val old = (5..9).map { tx(sydbank, 189.0, TransactionType.EXPENSE, utc(2026, it, 6), "MCD Netflix.com", "Media", "Streaming") }
+        val new = (9..10).map { tx(sjfPrivate, 189.0, TransactionType.EXPENSE, utc(2026, it, 20), "Netflix.com", "Media", "Streaming") }
+        val ticked = setOf(FinanceAnalysis.merchantOf("MCD Netflix.com"))
+        val s = SharedBills.status(input(newAccount() + old + new, { it.copy(sharedMerchants = ticked) }))
+        // Counted once, from the newest payments, and this month's payment from the new bank counts as paid.
+        assertEquals(1, s.myBills.size)
+        assertEquals(189.0, s.myOwnBills, 1.0)
+        assertEquals(189.0, s.myCardThisMonth, 0.01)
+        assertTrue(SharedBills.isTicked(FinanceAnalysis.merchantOf("Netflix.com"), ticked))
+        // Not every merchant matches: OK El is not OK A.m.b.a.
+        assertTrue(!SharedBills.isTicked(FinanceAnalysis.merchantOf("BS OK A.m.b.a."), setOf(FinanceAnalysis.merchantOf("BS OK El"))))
+    }
+
+    @Test
     fun `a partner bill the bills account pays is counted there only`() {
         // Kjestine's phone also sees the bills account, so it reports Balder as her own bill.
         val txs = newAccount() + tx(bills, 1159.0, TransactionType.EXPENSE, utc(2026, 10, 2), "BS Balder Green Hills ApS")
