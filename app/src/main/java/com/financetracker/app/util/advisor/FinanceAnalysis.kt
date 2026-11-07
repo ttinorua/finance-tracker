@@ -164,6 +164,32 @@ object FinanceAnalysis {
         }.sortedByDescending { it.yearlyCost }
     }
 
+    /**
+     * Bills too new to repeat 3 times yet, but fixed by their category (or merchant): 1–2 payments,
+     * the latest within the last 45 days. Taken as monthly at the latest amount until there are
+     * enough payments for [recurringPayments] to see the real rhythm. The rest of the app counts a
+     * payment in a fixed category as a bill, so these pages do too.
+     */
+    fun newFixedBills(
+        transactions: List<TransactionWithDetails>,
+        fixedCategoryIds: Set<Long>,
+        fixedMerchants: Set<String>,
+        now: Long
+    ): List<RecurringPayment> {
+        val expenses = transactions.filter { it.type == TransactionType.EXPENSE && it.note.isNotBlank() }
+        return expenses.groupBy { merchantOf(it.note) }.mapNotNull { (merchant, txs) ->
+            if (txs.size >= 3) return@mapNotNull null
+            val last = txs.maxBy { it.date }
+            if (now - last.date > 45 * DAY) return@mapNotNull null
+            if (last.categoryId !in fixedCategoryIds && merchant !in fixedMerchants) return@mapNotNull null
+            RecurringPayment(
+                merchant = merchant, cadence = Cadence.MONTHLY, lastAmount = last.amount, lastDate = last.date,
+                previousAmount = null, occurrences = txs.size, category = last.categoryName,
+                firstDate = txs.minOf { it.date }, categoryId = last.categoryId, accountName = last.accountName
+            )
+        }
+    }
+
     data class BudgetLine(val name: String, val budget: Double, val spent: Double, val elapsedFraction: Double) {
         val usedPct: Double get() = if (budget > 0) spent / budget * 100 else 0.0
         /** Spending at the current pace extrapolated to the whole month. */

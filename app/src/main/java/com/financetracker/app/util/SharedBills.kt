@@ -1,6 +1,7 @@
 package com.financetracker.app.util
 
 import com.financetracker.app.data.db.entity.TransactionType
+import com.financetracker.app.data.prefs.FixedExpenseCategories
 import com.financetracker.app.data.db.entity.TransactionWithDetails
 import com.financetracker.app.util.advisor.FinanceAnalysis
 import java.text.SimpleDateFormat
@@ -110,7 +111,9 @@ data class SharedBillsInput(
     /** Fixed monthly transfers (mine to partner's), once agreed ([FixedTransfers]); null = follow the month. */
     val fixed: Pair<Double, Double>? = null,
     /** The month ("yyyy-MM") the fixed transfers started, to count what's been sent since. */
-    val fixedSince: String? = null
+    val fixedSince: String? = null,
+    /** Categories marked fixed: a new payment in one is offered as a bill from its first payment. */
+    val fixedCategoryIds: Set<Long> = FixedExpenseCategories.fixedCategoryIds.value
 )
 
 data class SharedBillsStatus(
@@ -273,7 +276,13 @@ object SharedBills {
      * found repeating (not weekly, not groceries/fuel/parking), plus merchants you've marked fixed
      * even if they haven't repeated often enough yet. Per month, yearly and quarterly ones spread out.
      */
-    fun candidates(transactions: List<TransactionWithDetails>, billsAccountId: Long, fixedMerchants: Set<String>, now: Long): List<SharedCandidate> {
+    fun candidates(
+        transactions: List<TransactionWithDetails>,
+        billsAccountId: Long,
+        fixedMerchants: Set<String>,
+        now: Long,
+        fixedCategoryIds: Set<Long> = FixedExpenseCategories.fixedCategoryIds.value
+    ): List<SharedCandidate> {
         // A ticked or fixed bill under another bank's name ("Netflix.com" for "MCD Netflix.com") joins
         // the same history, so a bill that moved banks stays one regular bill.
         val mine = transactions.filter { it.accountId != billsAccountId && it.type == TransactionType.EXPENSE && !isTransferCategory(it.mainCategoryName, it.categoryName) }
@@ -288,7 +297,11 @@ object SharedBills {
         val extra = mine.filter { it.date >= yearAgo }.groupBy { FinanceAnalysis.merchantOf(it.note) }
             .filter { (m, _) -> m in fixedMerchants && found.none { f -> f.merchant == m } }
             .map { (m, txs) -> SharedCandidate(m, txs.sumOf { it.amount } / 12, "${label(m)} · fixed", txs.last().accountName, txs.maxOf { it.date }) }
-        return (found + extra).sortedByDescending { it.monthly }
+        // New bills in a fixed category: offered from the first payment, at the latest amount a month.
+        val new = FinanceAnalysis.newFixedBills(mine, fixedCategoryIds, emptySet(), now)
+            .filter { n -> !isHabitCategory(n.category) && (found + extra).none { it.merchant == n.merchant || sameMerchant(it.merchant, n.merchant) } }
+            .map { SharedCandidate(it.merchant, it.lastAmount, "${label(it.merchant)} · new", it.accountName, it.lastDate) }
+        return (found + extra + new).sortedByDescending { it.monthly }
     }
 
     /** Whether [merchant] is ticked as shared, whatever the bank puts in front of it: a bill ticked
@@ -378,7 +391,7 @@ object SharedBills {
             val onBudget = outflows.map { FinanceAnalysis.merchantOf(it.note) }
             val mine = input.transactions.filter { it.accountId != input.billsAccountId && it.type == TransactionType.EXPENSE }
             val mineRecurring = FinanceAnalysis.recurringPayments(mine, now).associateBy { it.merchant }
-            tickedBills(candidates(input.transactions, input.billsAccountId, input.fixedMerchants + input.sharedMerchants, now), input.sharedMerchants)
+            tickedBills(candidates(input.transactions, input.billsAccountId, input.fixedMerchants + input.sharedMerchants, now, input.fixedCategoryIds), input.sharedMerchants)
                 .filter { onBudget.none { b -> sameMerchant(b, it.merchant) } }
                 .forEach { c ->
                     result += mineRecurring[c.merchant]?.let { fromRecurring(it, label(c.merchant)) }
@@ -452,7 +465,7 @@ object SharedBills {
 
         // 1a + 1b: your ticked card bills, minus any now paid from the bills account.
         val recentOnBudget = outflows.filter { it.date >= now - 120 * DAY }.map { FinanceAnalysis.merchantOf(it.note) }.toSet()
-        val ticked = tickedBills(candidates(input.transactions, input.billsAccountId, input.fixedMerchants + input.sharedMerchants, now), input.sharedMerchants)
+        val ticked = tickedBills(candidates(input.transactions, input.billsAccountId, input.fixedMerchants + input.sharedMerchants, now, input.fixedCategoryIds), input.sharedMerchants)
         val (moved, myBillsKept) = ticked.partition { c -> recentOnBudget.any { sameMerchant(it, c.merchant) } }
         val myBills = myBillsKept.map { SharedLine(label(it.merchant), it.monthly, viaOf(it.merchant)) }
         val myBillMerchants = myBillsKept.map { it.merchant }.toSet()

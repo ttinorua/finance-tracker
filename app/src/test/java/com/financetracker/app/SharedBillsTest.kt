@@ -284,4 +284,28 @@ class SharedBillsTest {
         // Saving for it: two months to go at the end of October, so 1 of 3 months set aside.
         assertEquals(1 to 20_000.0, com.financetracker.app.util.BillsAhead.setAside(loan, now))
     }
+
+    private fun spotify(date: Long, categoryId: Long = 7L) =
+        TransactionWithDetails(nextId++, 199.0, TransactionType.EXPENSE, mine, "SJF Private", categoryId, "Streaming", "Media", "#000000", date, "Spotify")
+
+    @Test
+    fun `a bill in a fixed category shows from its first payment, marked new`() {
+        val c = SharedBills.candidates(listOf(spotify(utc(2026, 10, 5))), bills, emptySet(), now, setOf(7L))
+        val s = c.single { it.merchant.contains("spotify") }
+        assertEquals(199.0, s.monthly, 0.0)
+        assertTrue(s.label.endsWith("· new"))
+    }
+
+    @Test
+    fun `not when the category isn't fixed or the payment is old`() {
+        assertTrue(SharedBills.candidates(listOf(spotify(utc(2026, 10, 5))), bills, emptySet(), now, emptySet()).none { it.merchant.contains("spotify") })
+        assertTrue(SharedBills.candidates(listOf(spotify(utc(2026, 8, 1))), bills, emptySet(), now, setOf(7L)).none { it.merchant.contains("spotify") })
+    }
+
+    @Test
+    fun `three or more payments are left to the regular detection`() {
+        val txs = (8..10).map { spotify(utc(2026, it, 5)) }
+        assertTrue(FinanceAnalysis.newFixedBills(txs, setOf(7L), emptySet(), now).isEmpty())
+        assertEquals(1, FinanceAnalysis.newFixedBills(txs.takeLast(2), setOf(7L), emptySet(), now).size)
+    }
 }

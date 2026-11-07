@@ -52,7 +52,10 @@ fun RecurringSettings() {
             transactions, null, BudgetSettings.excludeTransfersFromSpending.value,
             BudgetSettings.shiftSalaryToNextMonth.value, MainAccountSettings.mainAccountId.value
         ).filter { !isTransferCategory(it.mainCategoryName, it.categoryName) }
-        FinanceAnalysis.recurringPayments(counted, now).filter { !isHabitCategory(it.category) }.sortedBy { it.nextDue }
+        val found = FinanceAnalysis.recurringPayments(counted, now).filter { !isHabitCategory(it.category) }
+        val new = FinanceAnalysis.newFixedBills(counted, FixedExpenseCategories.fixedCategoryIds.value, FixedMerchants.merchants.value, now)
+            .filter { n -> !isHabitCategory(n.category) && found.none { it.merchant == n.merchant } }
+        (found + new).sortedBy { it.nextDue }
     }
     fun isFixed(p: FinanceAnalysis.RecurringPayment) = p.merchant in fixedMerchants || p.categoryId in fixedCategories
     val fixedTotal = payments.filter(::isFixed).sumOf { it.monthlyCost }
@@ -99,7 +102,8 @@ fun RecurringSettings() {
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 Text(
-                                    "${Formatters.currency(p.monthlyCost, currency)}/month" + if (byCategory) " · fixed by its category" else "",
+                                    "${Formatters.currency(p.monthlyCost, currency)}/month" + (if (byCategory) " · fixed by its category" else "") +
+                                        if (p.occurrences < 3) " · new · ${p.occurrences} payment${if (p.occurrences == 1) "" else "s"}" else "",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
