@@ -61,6 +61,9 @@ data class Loan(
     val firstPaymentAmount: Double? = null,
     /** Shared with the household: the other phone sees and can edit the same loan. */
     val sharedWithHousehold: Boolean = false,
+    /** A bank loan that is part of the home (boliglån, pantebrev): shown with the mortgage and
+     * counted in friværdi. Null = not chosen; then a home-sounding name suggests it. */
+    val partOfHome: Boolean? = null,
     /** Who shared it, when it came from the partner's phone ("" = added here). */
     val sharedBy: String = "",
     /** When it was last changed (the newer copy wins between the two phones). */
@@ -183,7 +186,7 @@ object LoansAndGoals {
         .putOpt("payments_per_year", loan.paymentsPerYear).putOpt("payment_amount", loan.paymentAmount)
         .put("first_payment_date", loan.firstPaymentDate).putOpt("paid_from_account_id", loan.paidFromAccountId)
         .put("payout_date", loan.payoutDate).putOpt("first_payment_amount", loan.firstPaymentAmount)
-        .put("shared_with_household", loan.sharedWithHousehold).put("shared_by", loan.sharedBy).putOpt("updated_at", loan.updatedAt)
+        .put("shared_with_household", loan.sharedWithHousehold).putOpt("part_of_home", loan.partOfHome).put("shared_by", loan.sharedBy).putOpt("updated_at", loan.updatedAt)
         .put("schedule", JSONArray(loan.schedule.map(::paymentToJson)))
         .putOpt("total_payments", loan.totalPayments)
         .put("rate_resets", JSONArray(loan.rateResets))
@@ -249,6 +252,7 @@ object LoansAndGoals {
             payoutDate = text("payout_date"),
             firstPaymentAmount = num("first_payment_amount"),
             sharedWithHousehold = json.optBoolean("shared_with_household", false),
+            partOfHome = if (json.has("part_of_home") && !json.isNull("part_of_home")) json.optBoolean("part_of_home") else null,
             sharedBy = text("shared_by"),
             updatedAt = num("updated_at")?.toLong(),
             schedule = json.optJSONArray("schedule")?.let { rows -> (0 until rows.length()).mapNotNull { paymentFromJson(rows.opt(it)) } }.orEmpty(),

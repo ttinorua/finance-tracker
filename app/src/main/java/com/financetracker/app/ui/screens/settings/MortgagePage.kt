@@ -76,7 +76,8 @@ private const val HALF_YEAR = 182L * 24 * 60 * 60 * 1000
 fun MortgagePage(accountList: List<AccountUi>) {
     val accounts = accountList.map { it.account }
     val loans by LoansAndGoals.loans.collectAsState()
-    val mortgages = loans.filter { it.kind == "mortgage" }
+    // The home's loans: mortgages, and bank loans marked part of the home.
+    val mortgages = loans.filter(Mortgage::isHomeLoan)
     if (mortgages.isEmpty()) {
         Text(
             "Add your mortgage under Loans & goals first. Reading the loan document fills in the terms for you.",
@@ -97,7 +98,9 @@ fun MortgagePage(accountList: List<AccountUi>) {
     val now = remember { System.currentTimeMillis() }
     fun money(v: Double) = Formatters.currency(v, currency)
 
-    val status = remember(loan, transactions) { Mortgage.status(loan, transactions, now) }
+    val homeStatuses = remember(mortgages, transactions) { mortgages.map { it to Mortgage.status(it, transactions, now) } }
+    val status = homeStatuses.firstOrNull { it.first.id == loan.id }?.second ?: Mortgage.status(loan, transactions, now)
+    val mainLoan = Mortgage.mainHomeLoan(mortgages) ?: loan
     val recurring = remember(transactions) { FinanceAnalysis.recurringPayments(transactions, now) }
     val payments = remember(loan, transactions) { Mortgage.payments(loan, transactions) }
     val household by HouseholdSync.state.collectAsState()
@@ -126,8 +129,9 @@ fun MortgagePage(accountList: List<AccountUi>) {
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (mortgages.size > 1) {
+            HomeTotalsCard(homeStatuses, ::money)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                mortgages.forEach { m -> FilterChip(selected = m.id == loan.id, onClick = { pickedId = m.id }, label = { Text(m.name.ifBlank { "Mortgage" }) }) }
+                mortgages.forEach { m -> FilterChip(selected = m.id == loan.id, onClick = { pickedId = m.id }, label = { Text(loanName(m)) }) }
             }
         }
 
@@ -417,7 +421,8 @@ fun MortgagePage(accountList: List<AccountUi>) {
             }
         }
 
-        HomeCard(loan, status, now, ::money)
+        // The home's value and share sit on the main loan; friværdi takes off every home loan's debt.
+        HomeCard(mainLoan, homeStatuses.map { loanName(it.first) to it.second.debt }, now, ::money)
 
         // Interest after the tax deduction.
         if (status.year.interest + status.year.contribution > 0) {
@@ -494,7 +499,7 @@ object MortgageNav {
 
 /** Friværdi from the home value the person typed in, and their ownership share if set. */
 @Composable
-private fun HomeCard(loan: Loan, status: com.financetracker.app.util.MortgageStatus, now: Long, money: (Double) -> String) {
+private fun HomeCard(loan: Loan, debts: List<Pair<String, Double>>, now: Long, money: (Double) -> String) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var editingValue by remember { mutableStateOf(false) }
@@ -517,12 +522,17 @@ private fun HomeCard(loan: Loan, status: com.financetracker.app.util.MortgageSta
 
     Card {
         Text("Home equity (friværdi)", style = MaterialTheme.typography.titleSmall)
-        val equity = Mortgage.equity(loan, status)
+        val equity = Mortgage.homeEquity(loan.homeValue, debts.map { it.second })
         if (equity == null) {
             Text("What you own: the home's value minus the debt. Add the value to see it.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
             Text(money(equity), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = LocalAppPalette.current.positive)
             loan.homeValue?.takeIf { it > 0 }?.let { value -> Bar((equity / value).coerceIn(0.0, 1.0).toFloat()) }
+            if (debts.size > 1) {
+                LineRow("Home value", money(loan.homeValue!!))
+                debts.forEach { (name, debt) -> LineRow("− $name", "−${money(debt)}") }
+                LineRow("What you own together", money(equity), bold = true)
+            }
             loan.ownershipSharePct?.let { pct ->
                 Text("Your share (${pct.roundToInt()}%): ${money(equity * pct / 100)}", style = MaterialTheme.typography.bodyMedium)
             }
@@ -616,6 +626,22 @@ private fun LineRow(left: String, right: String, bold: Boolean = false) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(left, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, fontWeight = if (bold) FontWeight.Bold else null)
         Text(right, style = MaterialTheme.typography.bodyMedium, fontWeight = if (bold) FontWeight.Bold else FontWeight.Medium)
+    }
+}
+
+/** The short name on the loan's chip and in the home's totals. */
+private fun loanName(loan: Loan) = loan.name.ifBlank { if (loan.kind == "bank_loan") "Bank loan" else "Mortgage" }
+
+/** Shown when the home has more than one loan: what they owe and cost together. */
+@Composable
+private fun HomeTotalsCard(homeStatuses: List<Pair<Loan, com.financetracker.app.util.MortgageStatus>>, money: (Double) -> String) {
+    Card {
+        Text("The home · ${homeStatuses.size} loans", style = MaterialTheme.typography.titleSmall)
+        Row {
+            Figure("Debt in total", money(homeStatuses.sumOf { it.second.debt }), Modifier.weight(1f))
+            Figure("Costs a month", money(homeStatuses.sumOf { it.second.monthlyPayment }), Modifier.weight(1f))
+        }
+        homeStatuses.forEach { (loan, s) -> LineRow(loanName(loan), "${money(s.debt)} · ${money(s.monthlyPayment)}/mo") }
     }
 }
 
