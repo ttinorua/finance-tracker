@@ -319,26 +319,28 @@ fun SharedBillsPage(accounts: List<Account>) {
     }
 }
 
-private const val DAY_MS = 24L * 60 * 60 * 1000
+internal const val DAY_MS = 24L * 60 * 60 * 1000
 
 /**
- * The last figures worked out, kept while the app runs, so opening the page again is instant.
+ * The last figures a page worked out, kept while the app runs, so opening it again is instant.
  * They're reused only when everything they were worked out from is the same, on the same day.
  */
-private object StatusCache {
+internal class LastResult<T : Any> {
     private var key: Any? = null
-    private var value: Pair<Double, SharedBillsStatus>? = null
+    private var value: T? = null
 
-    @Synchronized fun lastFor(key: Any): Pair<Double, SharedBillsStatus>? = value?.takeIf { this.key == key }
-    @Synchronized fun remember(key: Any, value: Pair<Double, SharedBillsStatus>) { this.key = key; this.value = value }
+    @Synchronized fun lastFor(key: Any): T? = value?.takeIf { this.key == key }
+    @Synchronized fun remember(key: Any, value: T) { this.key = key; this.value = value }
 }
+
+private val StatusCache = LastResult<Pair<Double, SharedBillsStatus>>()
 
 /** While the transactions load and the figures are worked out. */
 @Composable
-private fun Loading() {
+internal fun Loading() {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(vertical = 24.dp)) {
         CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-        Text("Working out the shared bills…", style = MaterialTheme.typography.bodyMedium)
+        Text("Working out the bills…", style = MaterialTheme.typography.bodyMedium)
     }
 }
 
