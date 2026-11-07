@@ -47,6 +47,7 @@ import com.financetracker.app.data.ai.AiService
 import com.financetracker.app.data.ai.LearnedCategoryRules
 import com.financetracker.app.data.ai.MerchantLogoLookup
 import com.financetracker.app.data.db.entity.Account
+import com.financetracker.app.data.prefs.ClosedAccounts
 import com.financetracker.app.data.db.entity.Category
 import com.financetracker.app.data.db.entity.TransactionType
 import com.financetracker.app.data.db.entity.TransactionWithDetails
@@ -74,7 +75,9 @@ fun AddEditTransactionSheet(
     var type by remember { mutableStateOf(existing?.type ?: TransactionType.EXPENSE) }
     var amountText by remember { mutableStateOf(existing?.amount?.toString() ?: "") }
     var note by remember { mutableStateOf(existing?.note ?: "") }
-    var selectedAccountId by remember { mutableStateOf(existing?.accountId ?: accounts.firstOrNull()?.id) }
+    // A closed account isn't offered for new transactions (an existing one on it keeps its account).
+    val openAccounts = accounts.filter { !ClosedAccounts.isClosed(it.id) || it.id == existing?.accountId }
+    var selectedAccountId by remember { mutableStateOf(existing?.accountId ?: openAccounts.firstOrNull()?.id) }
     var selectedCategoryId by remember { mutableStateOf(existing?.categoryId) }
     var dateMillis by remember { mutableStateOf(existing?.date ?: todayUtcMidnight()) }
     var showDatePicker by remember { mutableStateOf(false) }
@@ -184,7 +187,7 @@ fun AddEditTransactionSheet(
             )
 
             AccountDropdown(
-                accounts = accounts,
+                accounts = openAccounts,
                 selectedId = selectedAccountId,
                 onSelected = { selectedAccountId = it }
             )

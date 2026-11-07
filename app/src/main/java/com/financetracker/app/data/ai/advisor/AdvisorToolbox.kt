@@ -25,6 +25,10 @@ import com.financetracker.app.data.prefs.SavingsGoal
 import com.financetracker.app.data.repository.FinanceRepository
 import com.financetracker.app.util.CategoryNames
 import com.financetracker.app.util.LoanSchedule
+import com.financetracker.app.util.HouseholdSummary
+import com.financetracker.app.util.SharedBills
+import com.financetracker.app.data.household.HouseholdSync
+import com.financetracker.app.data.prefs.SharedBillsSettings
 import com.financetracker.app.util.advisor.FinanceAnalysis
 import com.financetracker.app.util.advisor.FinanceCalculators
 import com.financetracker.app.util.advisor.GoalTracking
@@ -320,6 +324,27 @@ class AdvisorToolbox(private val snapshot: AdvisorSnapshot) {
                 "account" to str("Account the money is saved in, so progress follows its balance (omit to enter amounts by hand).")
             ),
             required = listOf("name")
+        ),
+        spec(
+            "get_household",
+            "The household shared with the user's partner: the shared budget lines (limits), what the user, the partner and joint " +
+                "accounts spent per line and month, a typical month per line, and the shared bills (fixed costs from the joint bills " +
+                "account and each person's share). Use for any question about 'we', 'our', the partner, the household budget or " +
+                "shared costs; for the mortgage also call get_loans_and_goals. Default period: the last 12 months.",
+            obj("from" to str(FROM_DESC + " Omit for the last 12 months; use the earliest month for all history."), "to" to str(TO_DESC))
+        ),
+        spec(
+            "set_household_budget",
+            "Prepare a card that changes the shared household budget: the monthly limit per household line (both phones see it). " +
+                "Nothing changes until the user taps Apply. Base the amounts on get_household, e.g. the typical month.",
+            obj(
+                "lines" to arr(
+                    "Lines to set.",
+                    obj("category" to str("The household line's main category, exactly as get_household names it, or a new main category."),
+                        "limit" to num("Monthly limit; 0 removes the line."), required = listOf("category", "limit"))
+                )
+            ),
+            required = listOf("lines")
         )
     )
 
@@ -352,6 +377,8 @@ class AdvisorToolbox(private val snapshot: AdvisorSnapshot) {
             "set_weekly_summary" -> setWeeklySummary(a)
             "save_loan" -> saveLoan(a)
             "save_goal" -> saveGoal(a)
+            "get_household" -> household(a)
+            "set_household_budget" -> setHouseholdBudget(a)
             else -> "Error: there's no function called ${call.name}."
         }
     }
@@ -382,6 +409,9 @@ class AdvisorToolbox(private val snapshot: AdvisorSnapshot) {
             appendLine("Uncategorized transactions: ${scoped.count(::isUncategorized)}.")
             val budgets = BudgetLimits.overallBudgets.value.size + BudgetLimits.categoryBudgets.value.size
             appendLine("Budgets set: $budgets. Saved loans: ${LoansAndGoals.loans.value.size}. Saved goals: ${LoansAndGoals.goals.value.size}.")
+            HouseholdSync.state.value.takeIf { it.joined }?.let { h ->
+                appendLine("Household with ${if (h.partner != null) h.partnerName else "no partner yet"}: ${h.lines.size} shared budget line(s). Use get_household for 'our' spending.")
+            }
             if (scoped.isNotEmpty()) appendLine("Transactions on record: ${scoped.size}, from ${day.format(scoped.minOf { it.date })} to ${day.format(scoped.maxOf { it.date })}.")
         }.trim()
     }
@@ -520,7 +550,7 @@ class AdvisorToolbox(private val snapshot: AdvisorSnapshot) {
                 if (!withSummaries) json.remove("summary")
                 // The full payment table is long; the advisor gets the key figures instead.
                 json.remove("schedule")
-                LoanSchedule.summary(loan, System.currentTimeMillis())?.let { json.put("schedule_summary", it) }
+                LoanSchedule.summary(loan, snapshot.now, myBillsShare(loan))?.let { json.put("schedule_summary", it) }
                 appendLine(compact(json))
             }
             appendLine("Savings goals:")
@@ -907,6 +937,55 @@ class AdvisorToolbox(private val snapshot: AdvisorSnapshot) {
         )
         val card = addCard(AdvisorCard(0, "${if (existing == null) "Save" else "Update"} goal: ${goal.name}", lines = lines, plan = ActionPlan.SaveGoal(goal)))
         return "Prepared card #${card.id} to save the goal \"${goal.name}\". Nothing is saved until the user taps Apply."
+    }
+
+    private fun household(a: JSONObject): String {
+        val state = HouseholdSync.state.value
+        val main = HouseholdSummary.advisorText(state, snapshot.now, text(a, "from"), text(a, "to"), ::money)
+        val bills = HouseholdSummary.sharedBillsText(state.sharedBills, state.myUid, state.partner?.let { state.partnerName } ?: "partner", ::money)
+        return listOfNotNull(main, bills ?: "No shared bills are set up (Settings > Shared bills).").joinToString("\n\n")
+    }
+
+    /**
+     * The user's part of a loan by the shared-bills split, when the loan is paid from the shared
+     * bills account or shared with the household; null otherwise (the user pays it all).
+     */
+    private fun myBillsShare(loan: Loan): Double? {
+        val setup = SharedBillsSettings.setup.value
+        val household = HouseholdSync.state.value
+        val shared = (setup.accountId != null && loan.paidFromAccountId == setup.accountId) || loan.sharedWithHousehold || loan.sharedBy.isNotBlank()
+        if (!shared) return null
+        return if (setup.isSetUp) SharedBills.myShare(SharedBills.averageNetSalary(snapshot.transactions, snapshot.now), setup.partnerNetIncome)
+        else household.partnerSharedBills?.snapshot?.let { 1 - it.publisherShare }
+    }
+
+    private fun setHouseholdBudget(a: JSONObject): String {
+        val state = HouseholdSync.state.value
+        if (!state.joined) return "Error: no household is set up, so there's no shared budget to change."
+        val rows = a.optJSONArray("lines") ?: return "Error: lines is required."
+        val mains = snapshot.categories.map { it.mainCategory }.toSet() + state.lines.map { it.mainCategory }
+        val changes = mutableMapOf<String, Double?>()
+        val previous = mutableMapOf<String, Double?>()
+        for (i in 0 until rows.length()) {
+            val row = rows.optJSONObject(i) ?: continue
+            val wanted = text(row, "category") ?: continue
+            val main = mains.firstOrNull { it.equals(wanted, ignoreCase = true) }
+                ?: return "Error: \"$wanted\" is not one of the user's main categories. Use a main category name from get_household or list_categories."
+            val limit = number(row, "limit") ?: return "Error: no limit for $main."
+            changes[main] = limit.takeIf { it > 0 }
+            previous[main] = state.lines.firstOrNull { it.mainCategory.equals(main, ignoreCase = true) }?.limit
+        }
+        if (changes.isEmpty()) return "Error: no lines to change."
+        val lines = changes.map { (main, limit) ->
+            val before = previous[main]
+            when {
+                limit == null -> "$main: remove (was ${before?.let(::money) ?: "not set"})"
+                before == null -> "$main: new line, ${money(limit)} a month"
+                else -> "$main: ${money(before)} → ${money(limit)} a month"
+            }
+        } + "Shared budget: ${state.partner?.let { state.partnerName } ?: "your partner"} sees the change too."
+        val card = addCard(AdvisorCard(0, "Change household budget", lines = lines, plan = ActionPlan.SetHouseholdBudget(changes, previous)))
+        return "Prepared card #${card.id} to change the household budget. Nothing changes until the user taps Apply."
     }
 
     private fun addCard(card: AdvisorCard): AdvisorCard = card.copy(id = nextCardId++).also { _cards += it }

@@ -96,6 +96,7 @@ import com.financetracker.app.ui.components.MainCategoryIconTile
 import com.financetracker.app.ui.components.readable
 import com.financetracker.app.ui.theme.LocalAppPalette
 import com.financetracker.app.util.Formatters
+import com.financetracker.app.util.HouseholdSummary
 import com.financetracker.app.util.advisor.AttentionItem
 import com.financetracker.app.util.advisor.AttentionLevel
 import kotlinx.coroutines.launch
@@ -361,10 +362,18 @@ fun HouseholdScreen(
                 }
             } else {
                 item {
+                    val oneSided = remember(state.lines, state.reports) {
+                        HouseholdSummary.oneSided(state, HouseholdSync.monthKey(System.currentTimeMillis())).associateBy { it.mainCategory }
+                    }
                     GlassCard(modifier = Modifier.fillMaxWidth()) {
                         state.lines.forEachIndexed { i, line ->
                             if (i > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                            LineRow(line, splits[line.mainCategory] ?: HouseholdSplit(), state.partnerName) { onOpenTransactions(line.mainCategory) }
+                            LineRow(line, splits[line.mainCategory] ?: HouseholdSplit(), state.partnerName, oneSided[line.mainCategory]?.let {
+                                // The other phone may file the same purchases under another category name.
+                                val (has, hasNot) = if (it.onlyMine) "you" to state.partnerName else state.partnerName to "you"
+                                "Only $has had ${line.mainCategory} spending the last 3 months. If $hasNot buy this too, " +
+                                    "check which category ${if (hasNot == "you") "your" else "$hasNot's"} phone puts it in."
+                            }) { onOpenTransactions(line.mainCategory) }
                         }
                     }
                 }
@@ -375,7 +384,7 @@ fun HouseholdScreen(
 }
 
 @Composable
-private fun LineRow(line: HouseholdBudgetLine, split: HouseholdSplit, partnerName: String, onClick: () -> Unit) {
+private fun LineRow(line: HouseholdBudgetLine, split: HouseholdSplit, partnerName: String, hint: String? = null, onClick: () -> Unit) {
     val over = split.total - line.limit
     Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 11.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -392,6 +401,7 @@ private fun LineRow(line: HouseholdBudgetLine, split: HouseholdSplit, partnerNam
         }
         SplitBar(split, line.limit, Modifier.padding(top = 8.dp))
         Legend(split, partnerName)
+        hint?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = LocalAppPalette.current.warning, modifier = Modifier.padding(top = 6.dp)) }
     }
 }
 
@@ -713,7 +723,8 @@ fun HouseholdSettings(accounts: List<Account>) {
             }
         }
         Text(
-            "Only spending in household categories from these accounts is shared. A joint account you both connect is counted once.",
+            "Only spending in household categories from these accounts is shared, for all the months this phone has. " +
+                "A joint account you both connect is counted once.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -737,6 +748,25 @@ fun HouseholdSettings(accounts: List<Account>) {
             }
         }
         LockNote("Encrypted on your phones. The server stores it, but only you and ${state.partnerName} can read it.")
+
+        // The habits that keep the shared numbers right (both phones, and the AI advisor, rely on them).
+        SectionLabel("For accurate numbers")
+        GlassCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(
+                    "Tick every account that pays for household things, including an old main account until it's closed.",
+                    "Use the same category names on both phones, e.g. groceries under the same main category.",
+                    "Categorise money you send each other back (MobilePay) as a transfer, not as groceries, so it isn't counted twice.",
+                    "Connect a joint account through bank sync on both phones, so it's recognised as joint and counted once.",
+                    "Open the app now and then, so your side stays up to date for ${state.partnerName}."
+                ).forEach { tip ->
+                    Row {
+                        Text("•", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(end = 8.dp))
+                        Text(tip, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        }
         TextButton(onClick = { confirmLeave = true }, modifier = Modifier.align(Alignment.CenterHorizontally)) {
             Text("Leave household", color = LocalAppPalette.current.negative)
         }

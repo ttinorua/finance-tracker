@@ -54,6 +54,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.financetracker.app.data.ai.LoanDocumentReader
+import com.financetracker.app.data.prefs.ClosedAccounts
 import com.financetracker.app.data.prefs.CurrencySettings
 import com.financetracker.app.data.prefs.Loan
 import com.financetracker.app.data.prefs.LoansAndGoals
@@ -324,7 +325,7 @@ internal fun LoanDialog(loan: Loan, accounts: List<AccountUi>, isNew: Boolean, o
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     FilterChip(selected = draft.paidFromAccountId == null, onClick = { draft = draft.copy(paidFromAccountId = null) }, label = { Text("Not set") })
-                    accounts.forEach { account ->
+                    accounts.filter { !ClosedAccounts.isClosed(it.account.id) || it.account.id == draft.paidFromAccountId }.forEach { account ->
                         FilterChip(
                             selected = draft.paidFromAccountId == account.account.id,
                             onClick = { draft = draft.copy(paidFromAccountId = account.account.id) },
@@ -403,7 +404,7 @@ private fun GoalDialog(
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     FilterChip(selected = draft.accountId == null, onClick = { draft = draft.copy(accountId = null) }, label = { Text("I'll enter it") })
-                    accounts.forEach { account ->
+                    accounts.filter { !ClosedAccounts.isClosed(it.account.id) || it.account.id == draft.accountId }.forEach { account ->
                         FilterChip(
                             selected = draft.accountId == account.account.id,
                             onClick = { draft = draft.copy(accountId = account.account.id) },

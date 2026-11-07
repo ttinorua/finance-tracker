@@ -396,8 +396,10 @@ object HouseholdSync {
 
     fun monthKey(time: Long): String = SimpleDateFormat("yyyy-MM", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(time)
 
-    /** Writes this month's and last month's spending in the household's categories, from the
-     * accounts you chose. Skips the write when nothing changed. */
+    /** Writes every month's spending in the household's categories, from the accounts you chose,
+     * so the household and the advisor can look back as far as this phone's history goes. A month
+     * the phone has history for is always written (empty if nothing in those categories), so the
+     * partner's phone can tell "spent nothing" from "no data". Skips months that haven't changed. */
     /** Shares your latest spending now (e.g. right after a background bank sync, before Android
      * stops the app again). Does nothing outside a household. */
     suspend fun publishNow() {
@@ -416,11 +418,14 @@ object HouseholdSync {
             set(java.util.Calendar.DAY_OF_MONTH, 1)
             add(java.util.Calendar.MONTH, -1)
         }.timeInMillis
-        val months = listOf(monthKey(now), monthKey(lastMonth))
         val ibanByAccount = EnableBankingPrefs.ibanLinkMap.value.entries.associate { (iban, accountId) -> accountId to iban }
-        val transactions = repository.observeTransactions().first().filter {
-            it.type == TransactionType.EXPENSE && it.accountId in s.includedAccountIds && (it.mainCategoryName ?: "") in mains
-        }
+        val fromIncluded = repository.observeTransactions().first().filter { it.accountId in s.includedAccountIds }
+        val transactions = fromIncluded.filter { it.type == TransactionType.EXPENSE && (it.mainCategoryName ?: "") in mains }
+        val months = HouseholdHistory.monthsToShare(
+            historyMonths = fromIncluded.map { monthKey(it.date) }.toSet(),
+            alreadyShared = s.reports.filter { it.uid == uid }.map { it.month }.toSet(),
+            thisMonth = monthKey(now), lastMonth = monthKey(lastMonth)
+        )
         val spending = firestore().collection("households").document(id).collection("spending")
         months.forEach { month ->
             val inMonth = transactions.filter { monthKey(it.date) == month }

@@ -1,5 +1,7 @@
 package com.financetracker.app.data.enablebanking
 
+import com.financetracker.app.data.prefs.ClosedAccounts
+
 import com.financetracker.app.data.ai.CategorySuggester
 import com.financetracker.app.data.ai.AiService
 import com.financetracker.app.data.ai.LearnedCategoryRules
@@ -120,6 +122,8 @@ object EnableBankingSyncCoordinator {
         var fetchedSoFar = 0
         for (bankAccount in accountsToSync) {
             val accountId = resolveLocalAccount(repository, bankAccount)
+            // Closed in Settings > Accounts: keep its history, fetch nothing new (Reopen syncs it again).
+            if (ClosedAccounts.isClosed(accountId)) continue
 
             val rowsResult = EnableBankingService.fetchTransactions(bankAccount.uid, sinceEpochMillis = null) { countSoFarForAccount ->
                 onProgress(SyncProgress(done = fetchedSoFar + countSoFarForAccount, total = 0))

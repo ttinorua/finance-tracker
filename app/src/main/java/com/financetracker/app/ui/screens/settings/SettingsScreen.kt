@@ -103,6 +103,7 @@ import com.financetracker.app.data.prefs.BudgetSettings
 import com.financetracker.app.data.prefs.CurrencySettings
 import com.financetracker.app.data.prefs.FixedExpenseCategories
 import com.financetracker.app.data.prefs.LinkedBankAccount
+import com.financetracker.app.data.prefs.ClosedAccounts
 import com.financetracker.app.data.prefs.MainAccountSettings
 import com.financetracker.app.data.prefs.SUPPORTED_CURRENCIES
 import com.financetracker.app.ui.components.AccountSelectorChip
@@ -131,6 +132,7 @@ fun SettingsScreen(
     val state by viewModel.uiState.collectAsState()
     val currencyCode by CurrencySettings.currencyCode.collectAsState()
     val mainAccountId by MainAccountSettings.mainAccountId.collectAsState()
+    val closedAccounts by ClosedAccounts.ids.collectAsState()
     val mainAutoPicked by MainAccountSettings.autoPicked.collectAsState()
     val shiftSalaryToNextMonth by BudgetSettings.shiftSalaryToNextMonth.collectAsState()
     val excludeTransfersFromSpending by BudgetSettings.excludeTransfersFromSpending.collectAsState()
@@ -191,7 +193,8 @@ fun SettingsScreen(
                                 ) {
                                     Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                                         Text(
-                                            if (mainAccountId == accountUi.account.id) "★ ${accountUi.account.name}" else accountUi.account.name,
+                                            (if (mainAccountId == accountUi.account.id) "★ ${accountUi.account.name}" else accountUi.account.name) +
+                                                if (accountUi.account.id in closedAccounts) " · closed" else "",
                                             style = MaterialTheme.typography.bodyLarge,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
@@ -228,6 +231,34 @@ fun SettingsScreen(
                                         Text(
                                             if (isMain && mainAutoPicked) "Picked automatically, usually where your salary lands. Tick another account to change it."
                                             else "Shown by default on every screen",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                // Closed: an old account being phased out. Its history stays and still
+                                // counts; it's only left out of the pickers and bank sync.
+                                val isClosed = accountUi.account.id in closedAccounts
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .toggleable(
+                                            value = isClosed,
+                                            enabled = isClosed || !isMain,
+                                            role = Role.Switch,
+                                            onValueChange = { ClosedAccounts.setClosed(accountUi.account.id, it) }
+                                        )
+                                ) {
+                                    Switch(checked = isClosed, onCheckedChange = null, enabled = isClosed || !isMain)
+                                    Column(modifier = Modifier.padding(start = 12.dp)) {
+                                        Text(if (isClosed) "Closed · switch off to reopen" else "Closed", style = MaterialTheme.typography.bodyMedium)
+                                        Text(
+                                            when {
+                                                isClosed -> "Hidden from the account pickers and not synced. Its history still counts in totals, trends and the household."
+                                                isMain -> "Make another account main before closing this one."
+                                                else -> "For an account you've stopped using. Nothing is deleted; its history keeps counting."
+                                            },
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )

@@ -128,3 +128,25 @@ data class SharedBillsMemberReport(
     val snapshot: SharedBillsSnapshot?,
     val updatedAt: Long
 )
+
+/** Which months a phone shares with the household. */
+object HouseholdHistory {
+
+    /**
+     * Every month from the oldest one this phone has history for up to this month, with no gaps
+     * (a quiet month inside the history is shared as "nothing spent", not left out), plus any
+     * month shared before so an outdated copy gets replaced. Months are "yyyy-MM".
+     */
+    fun monthsToShare(historyMonths: Set<String>, alreadyShared: Set<String>, thisMonth: String, lastMonth: String): List<String> {
+        val first = (historyMonths + lastMonth).filter { it <= thisMonth }.minOrNull() ?: lastMonth
+        val span = generateSequence(first) { next(it) }.takeWhile { it <= thisMonth }.toList()
+        return (span + alreadyShared + thisMonth).distinct().sorted()
+    }
+
+    /** The month after "yyyy-MM". */
+    fun next(month: String): String {
+        val (y, m) = month.split('-').map { it.toInt() }
+        val (ny, nm) = if (m == 12) (y + 1) to 1 else y to (m + 1)
+        return ny.toString().padStart(4, '0') + "-" + nm.toString().padStart(2, '0')
+    }
+}

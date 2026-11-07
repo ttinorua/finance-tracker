@@ -189,20 +189,33 @@ object LoanSchedule {
         }
 
     /** A short summary for the AI advisor, instead of every row. */
-    fun summary(loan: Loan, now: Long): String? {
+    fun summary(loan: Loan, now: Long, myShare: Double? = null): String? {
         if (loan.schedule.isEmpty()) return null
+        val payments = payments(loan)
         val next = nextPayment(loan, now)
-        val year = yearTotals(loan).firstOrNull { it.year == yearOf(now) + 1 }
+        val years = yearTotals(loan)
+        val paid = payments.filter { it.date < startOfDay(now) }
         fun r(v: Double) = Math.round(v).toString()
+        // What's actually paid in a year: interest & fee after the discount, plus principal.
+        fun year(y: YearTotal) = "${y.year}: interest & fee ${r(y.interestAndFee - y.discount)}, principal ${r(y.principal)}, " +
+            "total ${r(y.interestAndFee - y.discount + y.principal)}" + (if (y.estimates == y.payments) " (lender's estimate)" else "")
         return buildString {
-            append("${loan.schedule.size} payments ${loan.schedule.first().date} to ${loan.schedule.last().date}, ${paidCount(loan, now)} paid. ")
+            append("${payments.size} payments ${payments.firstOrNull()?.date?.let(::isoDate)} to ${payments.lastOrNull()?.date?.let(::isoDate)}, ")
+            append("each taken on the last day of its month; ${paid.size} paid. ")
             debtNow(loan, now)?.let { append("Debt now ${r(it)}. ") }
+            append("Paid so far: principal ${r(paid.sumOf { it.principal })}, interest & fee ${r(paid.sumOf { it.interestAndFee - it.discount })}. ")
             next?.let {
-                append("Next ${isoDate(it.date)} (taken on the last day of the month): table ${r(it.bankPayment)} (interest ${it.interest?.let(::r) ?: "?"}, fee ${it.fee?.let(::r) ?: "?"}, principal ${r(it.principal)})")
-                if (it.discount > 0) append(", discount ${r(it.discount)}, paid ${r(it.youPay)}")
-                append(", after tax ${r(it.afterTax)}. ")
+                append("Next ${isoDate(it.date)}: table ${r(it.bankPayment)} (interest ${it.interest?.let(::r) ?: "?"}, fee ${it.fee?.let(::r) ?: "?"}, principal ${r(it.principal)})")
+                if (it.discount > 0) append(", ${loan.discountName.ifBlank { "discount" }} ${r(it.discount)}")
+                append(", paid ${r(it.youPay)}, after tax ${r(it.afterTax)}. ")
             }
-            year?.let { append("${it.year}: interest & fee ${r(it.interestAndFee)}, principal ${r(it.principal)}. ") }
+            years.firstOrNull { it.year == yearOf(now) }?.let { append("This year ${year(it)}. ") }
+            years.firstOrNull { it.year == yearOf(now) + 1 }?.let { append("Next year ${year(it)}. ") }
+            append("Whole loan: principal ${r(years.sumOf { it.principal })}, interest & fee ${r(years.sumOf { it.interestAndFee - it.discount })}. ")
+            myShare?.let { share ->
+                next?.let { append("User's part by the shared-bills split (${Math.round(share * 100)}%): next payment ${r(it.youPay * share)}, ") }
+                Mortgage.plannedMonthly(loan, now)?.let { append("about ${r(it * share)} a month. ") }
+            }
             if (loan.rateResets.isNotEmpty()) append("Rows after the first rate reset are the lender's estimates.")
         }.trim()
     }
