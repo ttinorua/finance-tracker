@@ -21,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.financetracker.app.data.db.entity.Account
+import com.financetracker.app.data.prefs.ClosedAccounts
 
 /** Narrows a screen's data to one account, or all of them (null) when nothing is selected. The
  * main account carries a filled star; tapping another account's star makes it main. */
@@ -33,6 +34,8 @@ fun AccountSelectorChip(
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     val mainAccountId by MainAccountSettings.mainAccountId.collectAsState()
+    val closed by ClosedAccounts.ids.collectAsState()
+    val choices = accounts.filter { it.id !in closed || it.id == selectedAccountId }
     val selected = accounts.firstOrNull { it.id == selectedAccountId }
     val label = selected?.let { if (it.id == mainAccountId) "★ ${it.name}" else it.name } ?: "All accounts"
 
@@ -50,7 +53,7 @@ fun AccountSelectorChip(
                     onAccountSelected(null)
                 }
             )
-            accounts.forEach { account ->
+            choices.forEach { account ->
                 val isMain = account.id == mainAccountId
                 DropdownMenuItem(
                     text = { Text(account.name) },

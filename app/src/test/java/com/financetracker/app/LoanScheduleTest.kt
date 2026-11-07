@@ -192,6 +192,18 @@ class LoanScheduleTest {
     }
 
     @Test
+    fun `the advisor's summary has this year, paid so far, the whole loan and the user's share`() {
+        val text = LoanSchedule.summary(firstFive, utc(2027, 7, 15), myShare = 0.4)!!
+        assertTrue(text.contains("3 paid"))
+        // Principal paid so far: 11,787.39 + 17,321.38 + 17,480.13.
+        assertTrue(text.contains("Paid so far: principal 46589"))
+        assertTrue(text.contains("This year 2027: interest & fee"))
+        assertTrue(text.contains("Whole loan: principal 82031"))
+        assertTrue(text.contains("User's part by the shared-bills split (40%)"))
+        assertFalse(LoanSchedule.summary(firstFive, utc(2027, 7, 15))!!.contains("User's part"))
+    }
+
+    @Test
     fun `without a table the mortgage works as before`() {
         val plain = Loan(kind = "mortgage", monthlyPayment = 19590.0, paymentsPerYear = 4, firstPaymentDate = "2026-12-31")
         assertEquals(utc(2026, 12, 31), Mortgage.nextPaymentDate(plain, utc(2026, 11, 2)))
