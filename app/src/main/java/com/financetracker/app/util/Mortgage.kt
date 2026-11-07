@@ -320,6 +320,23 @@ object Mortgage {
     /** Friværdi: the home's value minus the debt (the whole, before any ownership share). */
     fun equity(loan: Loan, status: MortgageStatus): Double? = loan.homeValue?.let { it - status.debt }
 
+    /** Words in a bank loan's name or type that say it's part of the home. */
+    private val HOME_WORDS = listOf("bolig", "pantebrev", "home", "house", "hus", "ejerlejlighed")
+
+    /** A bank loan whose name or type sounds like the home's (the suggestion for "Part of the home"). */
+    fun soundsLikeHome(loan: Loan): Boolean =
+        listOf(loan.name, loan.loanType).any { text -> HOME_WORDS.any { text.contains(it, ignoreCase = true) } }
+
+    /** Part of the home: a mortgage, or a bank loan marked (or, when not chosen, sounding) so. */
+    fun isHomeLoan(loan: Loan): Boolean =
+        loan.kind == "mortgage" || (loan.kind == "bank_loan" && (loan.partOfHome ?: soundsLikeHome(loan)))
+
+    /** The loan that holds the home's value and ownership share: the first mortgage, else the first home loan. */
+    fun mainHomeLoan(homeLoans: List<Loan>): Loan? = homeLoans.firstOrNull { it.kind == "mortgage" } ?: homeLoans.firstOrNull()
+
+    /** Friværdi of the whole home: its value minus every home loan's debt. */
+    fun homeEquity(homeValue: Double?, debts: List<Double>): Double? = homeValue?.let { it - debts.sum() }
+
     fun afterTax(year: MortgageYear, loan: Loan? = null): Double =
         (year.interest + year.contribution) * (1 - (loan?.let(LoanSchedule::taxRate) ?: TAX_DEDUCTION_RATE))
 

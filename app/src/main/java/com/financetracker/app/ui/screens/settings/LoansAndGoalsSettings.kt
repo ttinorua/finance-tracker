@@ -110,8 +110,8 @@ fun LoansAndGoalsSettings(accounts: List<AccountUi>, modifier: Modifier = Modifi
                     },
                     loan.sharedBy.takeIf { it.isNotBlank() }?.let { "shared by $it" } ?: if (loan.sharedWithHousehold) "shared" else null
                 ).joinToString(" · ").ifBlank { loan.lender },
-                // A mortgage opens its page (with Edit there); other loans open the editor.
-                onClick = { if (loan.kind == "mortgage") onOpenMortgage(loan.id) else editingLoan = loan }
+                // A home loan opens the mortgage page (with Edit there); other loans open the editor.
+                onClick = { if (Mortgage.isHomeLoan(loan)) onOpenMortgage(loan.id) else editingLoan = loan }
             )
         }
         goals.forEach { goal ->
@@ -239,7 +239,7 @@ internal fun LoanDialog(loan: Loan, accounts: List<AccountUi>, isNew: Boolean, o
     // A new mortgage is paid from the shared bills account, when there is one.
     var draft by remember(loan.id) {
         mutableStateOf(
-            if (isNew && loan.kind == "mortgage" && loan.paidFromAccountId == null) loan.copy(paidFromAccountId = SharedBillsSettings.setup.value.accountId)
+            if (isNew && Mortgage.isHomeLoan(loan) && loan.paidFromAccountId == null) loan.copy(paidFromAccountId = SharedBillsSettings.setup.value.accountId)
             else loan
         )
     }
@@ -281,6 +281,15 @@ internal fun LoanDialog(loan: Loan, accounts: List<AccountUi>, isNew: Boolean, o
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     LOAN_KINDS.drop(3).forEach { (key, label) ->
                         FilterChip(selected = draft.kind == key, onClick = { draft = draft.copy(kind = key) }, label = { Text(label) })
+                    }
+                }
+                if (draft.kind == "bank_loan") {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Part of the home", style = MaterialTheme.typography.bodyMedium)
+                            Text("Shown with the mortgage and counted in friværdi", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(checked = Mortgage.isHomeLoan(draft), onCheckedChange = { draft = draft.copy(partOfHome = it) })
                     }
                 }
                 Field("Loan type", draft.loanType) { draft = draft.copy(loanType = it) }
