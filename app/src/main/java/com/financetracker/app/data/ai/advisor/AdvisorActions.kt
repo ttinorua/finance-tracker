@@ -1,5 +1,6 @@
 package com.financetracker.app.data.ai.advisor
 
+import com.financetracker.app.data.household.HouseholdSync
 import com.financetracker.app.data.prefs.WeeklySummarySettings
 import com.financetracker.app.data.prefs.UserAlerts
 import com.financetracker.app.data.prefs.UserAlert
@@ -47,6 +48,9 @@ sealed interface ActionPlan {
     data class SaveLoan(val loan: Loan) : ActionPlan
 
     data class SaveGoal(val goal: SavingsGoal) : ActionPlan
+
+    /** New monthly limits for household lines (null removes the line), and what they were. */
+    data class SetHouseholdBudget(val limits: Map<String, Double?>, val previous: Map<String, Double?>) : ActionPlan
 }
 
 /** What Apply replaced, to put back on Undo. */
@@ -61,6 +65,7 @@ sealed interface UndoInfo {
     data object Nothing : UndoInfo
     data class Loans(val previous: Loan?, val id: String) : UndoInfo
     data class Goals(val previous: SavingsGoal?, val id: String) : UndoInfo
+    data class HouseholdBudget(val previous: Map<String, Double?>) : UndoInfo
 }
 
 enum class CardStatus { PENDING, APPLIED, UNDONE, DISMISSED }
@@ -151,6 +156,20 @@ object AdvisorActions {
             LoansAndGoals.saveGoal(plan.goal, balance ?: plan.goal.savedAmount)
             "Saved to My loans & goals." to UndoInfo.Goals(previous, plan.goal.id)
         }
+        is ActionPlan.SetHouseholdBudget -> {
+            val failed = setHouseholdLimits(plan.limits)
+            (failed ?: "Household budget updated. Your partner sees it too.") to
+                (if (failed == null) UndoInfo.HouseholdBudget(plan.previous) else UndoInfo.Nothing)
+        }
+    }
+
+    /** Sets or removes each household line; returns an error message if one couldn't be saved. */
+    private suspend fun setHouseholdLimits(limits: Map<String, Double?>): String? {
+        limits.forEach { (main, limit) ->
+            val result = if (limit == null) HouseholdSync.removeLine(main) else HouseholdSync.setLine(main, limit)
+            result.exceptionOrNull()?.let { return "Couldn't change the household budget: ${it.message ?: "no connection"}." }
+        }
+        return null
     }
 
     suspend fun undo(repository: FinanceRepository, undo: UndoInfo): String = when (undo) {
@@ -189,6 +208,7 @@ object AdvisorActions {
             if (undo.previous != null) LoansAndGoals.restoreGoal(undo.previous) else LoansAndGoals.deleteGoal(undo.id)
             "Undone."
         }
+        is UndoInfo.HouseholdBudget -> setHouseholdLimits(undo.previous) ?: "Undone — the household budget is back to how it was."
     }
 
     private suspend fun deleteIfUnused(repository: FinanceRepository, categoryId: Long): Boolean {
