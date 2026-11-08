@@ -172,6 +172,77 @@ object HouseholdSummary {
         return py.toString().padStart(4, '0') + "-" + pm.toString().padStart(2, '0')
     }
 
+    /**
+     * Which household line the advisor means by [wanted]: a main category ("Food"), or one of its
+     * sub-categories ("Food › Groceries"; "Food > Groceries" and "Food/Groceries" work too), using
+     * the user's own [categories] (main category → sub-categories) and the existing [lines].
+     * Returns the line key, or an error to give back to the advisor.
+     */
+    fun lineKeyFor(wanted: String, categories: Map<String, List<String>>, lines: List<String>): Result<String> {
+        lines.firstOrNull { it.equals(wanted.trim(), ignoreCase = true) }?.let { return Result.success(it) }
+        categories.keys.firstOrNull { it.equals(wanted.trim(), ignoreCase = true) }?.let { return Result.success(it) }
+        // Split at the first separator only, so a sub-category like "Bars/Cafés" stays whole.
+        val parts = wanted.split('›', '>', '/', limit = 2).map { it.trim() }.filter { it.isNotEmpty() }
+        val main = parts.firstOrNull()?.let { m -> categories.keys.firstOrNull { it.equals(m, ignoreCase = true) } }
+            ?: return Result.failure(IllegalArgumentException("\"$wanted\" is not one of the user's main categories. Use a name from get_household or list_categories."))
+        if (parts.size == 1) return Result.success(main)
+        val sub = categories[main].orEmpty().firstOrNull { it.equals(parts[1], ignoreCase = true) }
+            ?: return Result.failure(IllegalArgumentException("\"${parts[1]}\" is not a sub-category of $main. Use list_categories."))
+        if (lines.any { it.equals(main, ignoreCase = true) }) {
+            return Result.failure(IllegalArgumentException("The whole of $main is already a household line, which includes $sub. Change $main instead."))
+        }
+        return Result.success(HouseholdMath.lineKey(main, sub))
+    }
+
+    /**
+     * The purchases behind the household lines (or just [line]) for the advisor: per line, who
+     * bought how much where, the biggest shops, and the latest [limit] purchases. Only purchases
+     * a phone shares in detail are here; a phone sharing totals only is named, so the advisor uses
+     * get_household's monthly totals for it.
+     */
+    fun purchasesText(state: HouseholdState, now: Long, line: String?, from: String?, to: String?, limit: Int, money: (Double) -> String): String {
+        if (!state.joined) return "The user hasn't set up a household."
+        val me = state.myUid ?: return "The household is still loading. Try again in a moment."
+        val who = state.partner?.let { state.partnerName } ?: "partner"
+        val lines = state.lines.map { it.mainCategory }.filter { line == null || it.equals(line.trim(), ignoreCase = true) }
+        if (lines.isEmpty()) return if (line == null) "No household budget lines yet." else "\"$line\" is not a household line. The lines are: ${state.lines.joinToString { it.mainCategory }}."
+        val range = monthRange(from, to, monthKey(now))
+        if (range.isEmpty()) return "No months in that period."
+        val reports = state.reports.filter { it.month in range }
+        fun name(p: com.financetracker.app.data.household.Payer) = when (p) {
+            com.financetracker.app.data.household.Payer.ME -> "you"
+            com.financetracker.app.data.household.Payer.PARTNER -> who
+            com.financetracker.app.data.household.Payer.JOINT -> "joint"
+        }
+        return buildString {
+            appendLine("Household purchases, ${range.first()} to ${range.last()}. 'you' is the user.")
+            val totalsOnly = reports.groupBy { it.uid }.filter { (_, r) -> r.all { it.transactions == null } }.keys
+            totalsOnly.forEach { uid ->
+                appendLine("${if (uid == me) "The user's" else "$who's"} phone shares totals only, so its purchases aren't listed; use get_household for its monthly totals" +
+                    (if (uid == me) " and find_transactions for the user's own purchases." else "."))
+            }
+            lines.forEach { key ->
+                val list = HouseholdMath.transactions(reports, me, key)
+                appendLine()
+                appendLine("$key: ${list.size} purchases, ${money(list.sumOf { it.transaction.amount })} in total.")
+                if (list.isEmpty()) return@forEach
+                list.groupBy { it.payer }.forEach { (p, l) ->
+                    appendLine("  ${name(p)}: ${l.size} purchases, ${money(l.sumOf { it.transaction.amount })}, average ${money(l.sumOf { it.transaction.amount } / l.size)}")
+                }
+                appendLine("  Biggest shops (total · purchases):")
+                list.groupBy { com.financetracker.app.util.advisor.FinanceAnalysis.merchantOf(it.transaction.text.ifBlank { it.transaction.category }) }
+                    .entries.sortedByDescending { (_, l) -> l.sumOf { it.transaction.amount } }.take(8)
+                    .forEach { (shop, l) -> appendLine("    ${shop.ifBlank { "unknown" }}: ${money(l.sumOf { it.transaction.amount })} · ${l.size}") }
+                appendLine("  Latest purchases (date · who · shop · amount):")
+                list.take(limit).forEach { h ->
+                    val t = h.transaction
+                    appendLine("    ${day(t.date)} · ${name(h.payer)} · ${t.text.ifBlank { t.category }.take(40)} · ${money(t.amount)}")
+                }
+                if (list.size > limit) appendLine("    … ${list.size - limit} older purchases not listed (use from/to for another period).")
+            }
+        }
+    }
+
     private fun pct(v: Double) = "${Math.round(v * 100)}%"
 
     private val utc = TimeZone.getTimeZone("UTC")

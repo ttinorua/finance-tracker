@@ -28,6 +28,7 @@ import com.financetracker.app.util.LoanSchedule
 import com.financetracker.app.util.HouseholdSummary
 import com.financetracker.app.util.SharedBills
 import com.financetracker.app.data.household.HouseholdSync
+import com.financetracker.app.data.household.HouseholdMath
 import com.financetracker.app.data.prefs.SharedBillsSettings
 import com.financetracker.app.util.advisor.FinanceAnalysis
 import com.financetracker.app.util.advisor.FinanceCalculators
@@ -330,8 +331,21 @@ class AdvisorToolbox(private val snapshot: AdvisorSnapshot) {
             "The household shared with the user's partner: the shared budget lines (limits), what the user, the partner and joint " +
                 "accounts spent per line and month, a typical month per line, and the shared bills (fixed costs from the joint bills " +
                 "account and each person's share). Use for any question about 'we', 'our', the partner, the household budget or " +
-                "shared costs; for the mortgage also call get_loans_and_goals. Default period: the last 12 months.",
+                "shared costs; for the mortgage also call get_loans_and_goals. Default period: the last 12 months. A line is a " +
+                "main category or one sub-category of it (\"Food › Groceries\"). Before suggesting a household limit, look at all " +
+                "history and compare the same months across years (December, holidays, summer) as well as the trend, and say which months need more.",
             obj("from" to str(FROM_DESC + " Omit for the last 12 months; use the earliest month for all history."), "to" to str(TO_DESC))
+        ),
+        spec(
+            "get_household_purchases",
+            "The purchases behind the household lines from both phones and all accounts each person ticked in Household: who bought, " +
+                "where, when and how much, the biggest shops per line and the latest purchases. Use to explain a line's spending or " +
+                "trend (which shops, more or bigger purchases). A phone that shares totals only is named; use get_household for its totals.",
+            obj(
+                "line" to str("One household line exactly as get_household names it (e.g. \"Food › Groceries\"); omit for all lines."),
+                "from" to str(FROM_DESC + " Omit for the last 12 months."), "to" to str(TO_DESC),
+                "limit" to num("How many of the latest purchases to list per line (default 40, max 200).")
+            )
         ),
         spec(
             "set_household_budget",
@@ -340,7 +354,7 @@ class AdvisorToolbox(private val snapshot: AdvisorSnapshot) {
             obj(
                 "lines" to arr(
                     "Lines to set.",
-                    obj("category" to str("The household line's main category, exactly as get_household names it, or a new main category."),
+                    obj("category" to str("The household line exactly as get_household names it, or a new one: a main category, or one sub-category as \"Main › Sub\" (e.g. \"Food › Groceries\")."),
                         "limit" to num("Monthly limit; 0 removes the line."), required = listOf("category", "limit"))
                 )
             ),
@@ -378,6 +392,9 @@ class AdvisorToolbox(private val snapshot: AdvisorSnapshot) {
             "save_loan" -> saveLoan(a)
             "save_goal" -> saveGoal(a)
             "get_household" -> household(a)
+            "get_household_purchases" -> HouseholdSummary.purchasesText(
+                HouseholdSync.state.value, snapshot.now, text(a, "line"), text(a, "from"), text(a, "to"), a.optInt("limit", 40).coerceIn(1, 200), ::money
+            )
             "set_household_budget" -> setHouseholdBudget(a)
             else -> "Error: there's no function called ${call.name}."
         }
@@ -963,17 +980,23 @@ class AdvisorToolbox(private val snapshot: AdvisorSnapshot) {
         val state = HouseholdSync.state.value
         if (!state.joined) return "Error: no household is set up, so there's no shared budget to change."
         val rows = a.optJSONArray("lines") ?: return "Error: lines is required."
-        val mains = snapshot.categories.map { it.mainCategory }.toSet() + state.lines.map { it.mainCategory }
+        val categories = snapshot.categories.filter { it.type == com.financetracker.app.data.db.entity.TransactionType.EXPENSE }
+            .groupBy({ it.mainCategory }, { it.name })
+        val lineKeys = state.lines.map { it.mainCategory }
         val changes = mutableMapOf<String, Double?>()
         val previous = mutableMapOf<String, Double?>()
         for (i in 0 until rows.length()) {
             val row = rows.optJSONObject(i) ?: continue
             val wanted = text(row, "category") ?: continue
-            val main = mains.firstOrNull { it.equals(wanted, ignoreCase = true) }
-                ?: return "Error: \"$wanted\" is not one of the user's main categories. Use a main category name from get_household or list_categories."
+            val main = HouseholdSummary.lineKeyFor(wanted, categories, lineKeys).getOrElse { return "Error: ${it.message}" }
             val limit = number(row, "limit") ?: return "Error: no limit for $main."
             changes[main] = limit.takeIf { it > 0 }
             previous[main] = state.lines.firstOrNull { it.mainCategory.equals(main, ignoreCase = true) }?.limit
+            // A whole main category includes its sub-category lines, so they go (nothing counted twice).
+            if (limit > 0 && HouseholdMath.subOf(main) == null) {
+                state.lines.filter { HouseholdMath.subOf(it.mainCategory) != null && HouseholdMath.mainOf(it.mainCategory).equals(main, ignoreCase = true) }
+                    .forEach { changes[it.mainCategory] = null; previous[it.mainCategory] = it.limit }
+            }
         }
         if (changes.isEmpty()) return "Error: no lines to change."
         val lines = changes.map { (main, limit) ->
