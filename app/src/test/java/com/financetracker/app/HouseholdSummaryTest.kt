@@ -160,4 +160,44 @@ class HouseholdSummaryTest {
         assertNull(HouseholdSummary.sharedBillsText(emptyList(), "me", "Kjestine", ::money))
         assertFalse(text.contains("own card"))
     }
+
+    // ---------------------------------------------------------------- advisor: sub-category lines and purchases
+
+    private val cats = mapOf("Food" to listOf("Groceries", "Restaurants", "Bars/Cafés"), "Gifts" to listOf("Christmas"))
+
+    @Test
+    fun `the advisor can name a sub-category line in several ways`() {
+        listOf("Food › Groceries", "food > groceries", "Food/Groceries").forEach {
+            assertEquals("Food › Groceries", HouseholdSummary.lineKeyFor(it, cats, emptyList()).getOrThrow())
+        }
+        assertEquals("Food › Bars/Cafés", HouseholdSummary.lineKeyFor("Food › Bars/Cafés", cats, emptyList()).getOrThrow())
+        assertEquals("Gifts", HouseholdSummary.lineKeyFor("gifts", cats, emptyList()).getOrThrow())
+        assertTrue(HouseholdSummary.lineKeyFor("Food › Fuel", cats, emptyList()).isFailure)
+        assertTrue(HouseholdSummary.lineKeyFor("Travel", cats, emptyList()).isFailure)
+        // The whole of Food is already shared, which includes Groceries.
+        assertTrue(HouseholdSummary.lineKeyFor("Food › Groceries", cats, listOf("Food")).isFailure)
+    }
+
+    @Test
+    fun `the advisor sees both phones' purchases behind a line, from every ticked account`() {
+        val key = "Food › Groceries"
+        fun tx(id: String, account: String, amount: Double, day: Int, shop: String) =
+            com.financetracker.app.data.household.SharedTransaction(id, account, key, "Groceries", amount, utc(2026, 11, day), shop)
+        val mine = MemberReport("me", "2026-11", listOf(AccountTotal("main", key, 300.0), AccountTotal("old", key, 100.0)),
+            listOf(tx("1", "main", 300.0, 3, "Netto Solrød"), tx("2", "old", 100.0, 5, "Rema 1000")), 0L)
+        val hers = MemberReport("her", "2026-11", listOf(AccountTotal("hers", key, 250.0)), listOf(tx("3", "hers", 250.0, 6, "Netto Køge")), 0L)
+        val s = state(listOf(mine, hers), listOf(HouseholdBudgetLine("l", key, 7000.0, "me", 0L)))
+        val text = HouseholdSummary.purchasesText(s, now, "food › groceries", "2026-11", "2026-11", 40, ::money)
+        assertTrue(text, text.contains("Food › Groceries: 3 purchases, 650 in total."))
+        assertTrue(text, text.contains("you: 2 purchases, 400"))
+        assertTrue(text, text.contains("Kjestine: 1 purchases, 250"))
+        assertTrue(text, text.contains("2026-11-06 · Kjestine · Netto Køge · 250"))
+    }
+
+    @Test
+    fun `a phone sharing totals only is named instead of its purchases`() {
+        val hers = report("her", "2026-11", Triple("hers", "Food", 250.0))
+        val text = HouseholdSummary.purchasesText(state(listOf(hers)), now, null, null, null, 40, ::money)
+        assertTrue(text, text.contains("Kjestine's phone shares totals only"))
+    }
 }
