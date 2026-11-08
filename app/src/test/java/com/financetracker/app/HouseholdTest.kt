@@ -77,4 +77,26 @@ class HouseholdTest {
         assertEquals(450.0, HouseholdMath.splits(listOf(partner), "a").getValue("Food").partner, 0.0)
         assertTrue(HouseholdMath.transactions(listOf(partner), "a").isEmpty())
     }
+
+    @Test
+    fun `a purchase counts under its whole main category, else its own sub-category`() {
+        val keys = listOf("Home", HouseholdMath.lineKey("Food", "Groceries"))
+        assertEquals("Food › Groceries", HouseholdMath.lineFor(keys, "Food", "Groceries"))
+        // Names match ignoring case and spaces, so both phones agree.
+        assertEquals("Food › Groceries", HouseholdMath.lineFor(keys, " food", "groceries "))
+        // Other parts of Food stay private.
+        assertEquals(null, HouseholdMath.lineFor(keys, "Food", "Restaurants"))
+        // A whole main category takes every part of it.
+        assertEquals("Home", HouseholdMath.lineFor(keys, "home", "Garden"))
+        assertEquals(null, HouseholdMath.lineFor(keys, null, "Groceries"))
+    }
+
+    @Test
+    fun `a sub-category line keeps its main and sub apart`() {
+        val key = HouseholdMath.lineKey("Food ", " Groceries")
+        assertEquals("Food", HouseholdMath.mainOf(key))
+        assertEquals("Groceries", HouseholdMath.subOf(key))
+        assertEquals(null, HouseholdMath.subOf("Home"))
+        assertEquals("Home", HouseholdMath.mainOf("Home"))
+    }
 }
