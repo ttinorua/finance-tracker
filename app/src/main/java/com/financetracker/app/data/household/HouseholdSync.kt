@@ -411,7 +411,8 @@ object HouseholdSync {
         val id = s.householdId ?: return
         val householdKey = key ?: return
         val uid = signIn()
-        val mains = s.lines.map { it.mainCategory }.toSet()
+        // Each purchase is reported under the budget line it counts in: a whole main category or one sub-category.
+        val lineKeys = s.lines.map { it.mainCategory }
         val now = System.currentTimeMillis()
         val lastMonth = java.util.Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
             timeInMillis = now
@@ -420,7 +421,8 @@ object HouseholdSync {
         }.timeInMillis
         val ibanByAccount = EnableBankingPrefs.ibanLinkMap.value.entries.associate { (iban, accountId) -> accountId to iban }
         val fromIncluded = repository.observeTransactions().first().filter { it.accountId in s.includedAccountIds }
-        val transactions = fromIncluded.filter { it.type == TransactionType.EXPENSE && (it.mainCategoryName ?: "") in mains }
+        val transactions = fromIncluded.filter { it.type == TransactionType.EXPENSE }
+            .mapNotNull { tx -> HouseholdMath.lineFor(lineKeys, tx.mainCategoryName, tx.categoryName)?.let { tx to it } }
         val months = HouseholdHistory.monthsToShare(
             historyMonths = fromIncluded.map { monthKey(it.date) }.toSet(),
             alreadyShared = s.reports.filter { it.uid == uid }.map { it.month }.toSet(),
@@ -428,18 +430,18 @@ object HouseholdSync {
         )
         val spending = firestore().collection("households").document(id).collection("spending")
         months.forEach { month ->
-            val inMonth = transactions.filter { monthKey(it.date) == month }
+            val inMonth = transactions.filter { monthKey(it.first.date) == month }
             fun accountTag(accountId: Long) = HouseholdCrypto.tag(householdKey, ibanByAccount[accountId] ?: "local:$uid:$accountId")
             val totals = JSONArray()
-            inMonth.groupBy { accountTag(it.accountId) to it.mainCategoryName.orEmpty() }.forEach { (k, list) ->
-                totals.put(JSONArray().put(k.first).put(k.second).put(list.sumOf { it.amount }))
+            inMonth.groupBy { (tx, line) -> accountTag(tx.accountId) to line }.forEach { (k, list) ->
+                totals.put(JSONArray().put(k.first).put(k.second).put(list.sumOf { it.first.amount }))
             }
             val json = JSONObject().put("month", month).put("totals", totals)
             if (s.shareDetails) {
                 val txs = JSONArray()
-                inMonth.forEach { tx ->
+                inMonth.forEach { (tx, line) ->
                     txs.put(
-                        JSONObject().put("id", tx.id.toString()).put("a", accountTag(tx.accountId)).put("m", tx.mainCategoryName.orEmpty())
+                        JSONObject().put("id", tx.id.toString()).put("a", accountTag(tx.accountId)).put("m", line)
                             .put("c", tx.categoryName.orEmpty()).put("v", tx.amount).put("d", tx.date).put("t", tx.note)
                     )
                 }

@@ -1,8 +1,10 @@
 package com.financetracker.app.data.household
 
-/** One line of the shared budget: a main category and its monthly limit. */
+/** One line of the shared budget: a main category, or one sub-category of it ("Food › Groceries",
+ * see [HouseholdMath.lineKey]), and its monthly limit. */
 data class HouseholdBudgetLine(
     val id: String,
+    /** The line's key: a main category, or "Main › Sub" for one sub-category. */
     val mainCategory: String,
     val limit: Double,
     val updatedBy: String,
@@ -49,6 +51,30 @@ data class HouseholdTransaction(val transaction: SharedTransaction, val payer: P
  * you both connect: it's counted once (from whichever member sorts first, so both phones agree)
  * and shown as joint. */
 object HouseholdMath {
+
+    /** Between the main category and the sub-category in a line's key. */
+    const val SEP = " › "
+
+    /** A line's key: [main] for the whole main category, "Main › Sub" for one sub-category. */
+    fun lineKey(main: String, sub: String? = null): String =
+        if (sub.isNullOrBlank()) main.trim() else main.trim() + SEP + sub.trim()
+
+    fun mainOf(key: String): String = key.substringBefore(SEP)
+    fun subOf(key: String): String? = key.substringAfter(SEP, "").ifBlank { null }
+
+    /**
+     * The budget line (key from [keys]) a purchase in [main] / [sub] counts under: its whole main
+     * category when that's shared, else its own sub-category's line; null when it isn't shared.
+     * Names are compared ignoring case and spaces at the ends.
+     */
+    fun lineFor(keys: Collection<String>, main: String?, sub: String?): String? {
+        val m = main?.trim().orEmpty()
+        if (m.isEmpty()) return null
+        keys.firstOrNull { subOf(it) == null && it.trim().equals(m, ignoreCase = true) }?.let { return it }
+        val s = sub?.trim().orEmpty()
+        if (s.isEmpty()) return null
+        return keys.firstOrNull { k -> subOf(k)?.equals(s, ignoreCase = true) == true && mainOf(k).trim().equals(m, ignoreCase = true) }
+    }
 
     /** For each account, the member whose numbers count, and whether it's joint. */
     private fun owners(reports: List<MemberReport>): Map<String, Pair<String, Boolean>> {

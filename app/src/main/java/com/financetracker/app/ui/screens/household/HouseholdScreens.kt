@@ -259,7 +259,8 @@ fun HouseholdState.attentionItems(): List<AttentionItem> {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HouseholdScreen(
-    mainCategories: List<String>,
+    /** Expense main categories, each with its sub-categories. */
+    categories: Map<String, List<String>>,
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenTransactions: (mainCategory: String?) -> Unit
@@ -380,7 +381,7 @@ fun HouseholdScreen(
             }
         }
     }
-    if (editing) EditBudgetDialog(state.lines, mainCategories, onDismiss = { editing = false })
+    if (editing) EditBudgetDialog(state.lines, categories, onDismiss = { editing = false })
 }
 
 @Composable
@@ -388,7 +389,7 @@ private fun LineRow(line: HouseholdBudgetLine, split: HouseholdSplit, partnerNam
     val over = split.total - line.limit
     Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 11.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            MainCategoryIconTile(line.mainCategory)
+            MainCategoryIconTile(HouseholdMath.mainOf(line.mainCategory))
             Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                 Text(line.mainCategory, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
                 Text(
@@ -408,12 +409,20 @@ private fun LineRow(line: HouseholdBudgetLine, split: HouseholdSplit, partnerNam
 /** Add, change or remove household lines. Each line is saved on its own, so a change your
  * partner makes to another line at the same time is kept. */
 @Composable
-private fun EditBudgetDialog(lines: List<HouseholdBudgetLine>, mainCategories: List<String>, onDismiss: () -> Unit) {
+private fun EditBudgetDialog(lines: List<HouseholdBudgetLine>, categories: Map<String, List<String>>, onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
     val edits = remember { mutableStateMapOf<String, String>().apply { lines.forEach { put(it.mainCategory, Formatters.whole(it.limit).replace(",", "")) } } }
     val removed = remember { mutableStateMapOf<String, Boolean>() }
     var adding by remember { mutableStateOf(false) }
-    val available = mainCategories.filter { m -> edits.keys.none { it.equals(m, ignoreCase = true) } }.sorted()
+    // The lines on the list now; a whole main category includes its sub-categories, so they can't be added on their own.
+    val active = edits.keys.filter { removed[it] != true }
+    fun isActive(key: String) = active.any { it.equals(key, ignoreCase = true) }
+    fun add(key: String) {
+        edits[key] = edits[key].orEmpty()
+        removed.remove(key)
+        adding = false
+    }
+    val anyLeft = categories.keys.any { !isActive(it) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Household budget") },
@@ -426,7 +435,7 @@ private fun EditBudgetDialog(lines: List<HouseholdBudgetLine>, mainCategories: L
                 )
                 edits.keys.sortedBy { it.lowercase() }.filter { removed[it] != true }.forEach { main ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        MainCategoryIconTile(main, size = 32.dp)
+                        MainCategoryIconTile(HouseholdMath.mainOf(main), size = 32.dp)
                         OutlinedTextField(
                             value = edits[main].orEmpty(),
                             onValueChange = { v -> edits[main] = v.filter { it.isDigit() || it == '.' } },
@@ -440,21 +449,46 @@ private fun EditBudgetDialog(lines: List<HouseholdBudgetLine>, mainCategories: L
                     }
                 }
                 Box {
-                    TextButton(onClick = { adding = true }, enabled = available.isNotEmpty()) {
+                    TextButton(onClick = { adding = true }, enabled = anyLeft) {
                         Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                         Text("Add a category", modifier = Modifier.padding(start = 6.dp))
                     }
+                    // A whole main category, or just one of its sub-categories.
                     DropdownMenu(expanded = adding, onDismissRequest = { adding = false }) {
-                        available.forEach { main ->
+                        categories.keys.sortedBy { it.lowercase() }.forEach { main ->
+                            if (isActive(main)) {
+                                DropdownMenuItem(text = { Text("$main  ✓ shared, all its parts") }, enabled = false, onClick = {}, leadingIcon = { MainCategoryIconTile(main, size = 28.dp) })
+                                return@forEach
+                            }
+                            val subLines = active.filter { HouseholdMath.subOf(it) != null && HouseholdMath.mainOf(it).equals(main, ignoreCase = true) }
                             DropdownMenuItem(
-                                text = { Text(main) },
+                                text = {
+                                    Column {
+                                        Text("$main · whole category")
+                                        if (subLines.isNotEmpty()) {
+                                            Text(
+                                                "replaces " + subLines.joinToString { HouseholdMath.subOf(it).orEmpty() },
+                                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                },
                                 leadingIcon = { MainCategoryIconTile(main, size = 28.dp) },
                                 onClick = {
-                                    edits[main] = ""
-                                    removed.remove(main)
-                                    adding = false
+                                    subLines.forEach { removed[it] = true }
+                                    add(main)
                                 }
                             )
+                            categories[main].orEmpty().sortedBy { it.lowercase() }.forEach { sub ->
+                                val key = HouseholdMath.lineKey(main, sub)
+                                val shared = isActive(key)
+                                DropdownMenuItem(
+                                    text = { Text(if (shared) "$sub  ✓ shared" else sub) },
+                                    enabled = !shared,
+                                    onClick = { add(key) },
+                                    modifier = Modifier.padding(start = 28.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -515,7 +549,7 @@ fun HouseholdTransactionsScreen(mainCategory: String?, onBack: () -> Unit) {
             items(list, key = { it.payer.name + it.transaction.id }) { item ->
                 val tx = item.transaction
                 Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    CategoryIconTile(null, tx.category.ifBlank { null }, tx.mainCategory, null, size = 36.dp)
+                    CategoryIconTile(null, tx.category.ifBlank { null }, HouseholdMath.mainOf(tx.mainCategory), null, size = 36.dp)
                     Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                         Text(tx.text.ifBlank { tx.category }, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
